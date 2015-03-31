@@ -9,6 +9,10 @@ First version using multiple threads for send/receive.  Receive thread is incomp
 ## v2.0
 First complete version using threads.  Receive thread is complete!
 
+## v3.0
+PID(ish) control added.
+Fixed a bug where user had access to backing pan/tilt/zoom positions.  These variables are now read-only.
+
 ## Notes on this class
 1. Does not resend commands that are the same as the previously completed command.  This prevents the software from wasting time sending commands that are not needed.
 2. Implements its own limit checking.  The camera firmware provides limit checking, but only for the pan/tilt drive and then limited to being centered around the origin.

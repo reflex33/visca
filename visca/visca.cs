@@ -205,12 +205,14 @@ namespace visca
                 set
                 {
                     set_position_from_encoder_count(value);
+                    on_position_changed(EventArgs.Empty);  // Event triggered for data changed
                 }
             }
             protected void set_position_from_encoder_count(short e)  // Support function so derived classes can still skip error checking
             {
                 _encoder_count = e;
                 _radians = e * 0.075 * (Math.PI / 180.0);
+                on_position_changed(EventArgs.Empty);  // Event triggered for data changed
             }
             public virtual double radians
             {
@@ -218,12 +220,14 @@ namespace visca
                 set
                 {
                     set_position_from_radians(value);
+                    on_position_changed(EventArgs.Empty);  // Event triggered for data changed
                 }
             }
             protected void set_position_from_radians(double r)  // Support function so derived classes can still skip error checking
             {
                 _radians = r;
                 _encoder_count = (short)Math.Round(r * (180.0 / Math.PI) / 0.075);  // Convert to encoder counts
+                on_position_changed(EventArgs.Empty);  // Event triggered for data changed
             }
             public virtual double degrees
             {
@@ -231,12 +235,14 @@ namespace visca
                 set
                 {
                     set_position_from_degrees(value);
+                    on_position_changed(EventArgs.Empty);  // Event triggered for data changed
                 }
             }
             protected void set_position_from_degrees(double d)  // Support function so derived classes can still skip error checking
             {
                 _radians = d * (Math.PI / 180.0);
                 _encoder_count = (short)Math.Round(d / 0.075);  // Convert to encoder counts
+                on_position_changed(EventArgs.Empty);  // Event triggered for data changed
             }
 
             public angular_position() { }
@@ -267,6 +273,17 @@ namespace visca
                 radians = rhs.radians;
             }
 
+            // Using a protected invoking method so the derived classes can call the event
+            public event EventHandler<EventArgs> position_changed;
+            protected virtual void on_position_changed(EventArgs e)
+            {
+                // Make a temporary copy of the event to avoid possibility of 
+                // a race condition if the last subscriber unsubscribes 
+                // immediately after the null check and before the event is raised.
+                EventHandler<EventArgs> handler = position_changed;
+                if (handler != null) handler(this, e);
+            }
+
             public static angular_position create_from_encoder_count(short e)
             {
                 angular_position p = new angular_position();
@@ -286,6 +303,28 @@ namespace visca
                 return p;
             }
         }
+        public class readonly_angular_position
+        {
+            private angular_position pos = new angular_position();
+
+            public readonly_angular_position(angular_position rhs)
+            {
+                pos.deep_clone(rhs);
+            }
+
+            public short encoder_count
+            {
+                get { return pos.encoder_count; }
+            }
+            public double radians
+            {
+                get { return pos.radians; }
+            }
+            public double degrees
+            {
+                get { return pos.degrees; }
+            }
+        }
         public class pan_position : angular_position
         {
             public override short encoder_count
@@ -297,6 +336,7 @@ namespace visca
                         throw new System.ArgumentException("Pan angular position encoder count outside hardware limits");
 
                     base.encoder_count = value;
+                    on_position_changed(EventArgs.Empty);  // Event triggered for data changed
                 }
             }
             public override double radians
@@ -308,6 +348,7 @@ namespace visca
                         throw new System.ArgumentException("Pan angular position radians outside hardware limits");
 
                     base.radians = value;
+                    on_position_changed(EventArgs.Empty);  // Event triggered for data changed
                 }
             }
             public override double degrees
@@ -319,6 +360,7 @@ namespace visca
                         throw new System.ArgumentException("Pan angular position degrees outside hardware limits");
 
                     base.degrees = value;
+                    on_position_changed(EventArgs.Empty);  // Event triggered for data changed
                 }
             }
 
@@ -381,6 +423,28 @@ namespace visca
                 }
             }
         }
+        public class readonly_pan_position
+        {
+            private pan_position pos = new pan_position();
+
+            public readonly_pan_position(pan_position rhs)
+            {
+                pos.deep_clone(rhs);
+            }
+
+            public short encoder_count
+            {
+                get { return pos.encoder_count; }
+            }
+            public double radians
+            {
+                get { return pos.radians; }
+            }
+            public double degrees
+            {
+                get { return pos.degrees; }
+            }
+        }
         public class tilt_position : angular_position
         {
             public override short encoder_count
@@ -392,6 +456,7 @@ namespace visca
                         throw new System.ArgumentException("Tilt angular position encoder count outside hardware limits");
 
                     base.encoder_count = value;
+                    on_position_changed(EventArgs.Empty);  // Event triggered for data changed
                 }
             }
             public override double radians
@@ -403,6 +468,7 @@ namespace visca
                         throw new System.ArgumentException("Tilt angular position radians outside hardware limits");
 
                     base.radians = value;
+                    on_position_changed(EventArgs.Empty);  // Event triggered for data changed
                 }
             }
             public override double degrees
@@ -414,6 +480,7 @@ namespace visca
                         throw new System.ArgumentException("Tilt angular position degrees outside hardware limits");
 
                     base.degrees = value;
+                    on_position_changed(EventArgs.Empty);  // Event triggered for data changed
                 }
             }
 
@@ -476,6 +543,28 @@ namespace visca
                 }
             }
         }
+        public class readonly_tilt_position
+        {
+            private tilt_position pos = new tilt_position();
+
+            public readonly_tilt_position(tilt_position rhs)
+            {
+                pos.deep_clone(rhs);
+            }
+
+            public short encoder_count
+            {
+                get { return pos.encoder_count; }
+            }
+            public double radians
+            {
+                get { return pos.radians; }
+            }
+            public double degrees
+            {
+                get { return pos.degrees; }
+            }
+        }
         public class zoom_position
         {
             private static Tuple<double, short>[] zoom_values = new Tuple<double, short>[29]  // Zoom ratios and their associated encoder counts (in decimal)
@@ -524,6 +613,7 @@ namespace visca
                         {
                             _zoom_ratio = ((zoom_values[i + 1].Item1 - zoom_values[i].Item1) / (zoom_values[i + 1].Item2 - zoom_values[i].Item2)) * (value - zoom_values[i].Item2) + zoom_values[i].Item1;
                             _encoder_count = value;
+                            on_position_changed(EventArgs.Empty);  // Event triggered for data changed
                             return;
                         }
 
@@ -540,6 +630,7 @@ namespace visca
                         {
                             _encoder_count = (short)Math.Round(((zoom_values[i + 1].Item2 - zoom_values[i].Item2) / (zoom_values[i + 1].Item1 - zoom_values[i].Item1)) * (value - zoom_values[i].Item1) + zoom_values[i].Item2);
                             _zoom_ratio = value;
+                            on_position_changed(EventArgs.Empty);  // Event triggered for data changed
                             return;
                         }
 
@@ -575,6 +666,20 @@ namespace visca
                 ratio = rhs.ratio;
             }
 
+            // Using a protected invoking method so the derived classes can call the event
+            public event EventHandler<EventArgs> position_changed;
+            protected virtual void on_position_changed(EventArgs e)
+            {
+                // Make a temporary copy of the event to avoid possibility of 
+                // a race condition if the last subscriber unsubscribes 
+                // immediately after the null check and before the event is raised.
+                EventHandler<EventArgs> handler = position_changed;
+                if (handler != null)
+                {
+                    handler(this, e);
+                }
+            }
+
             public static zoom_position create_from_encoder_count(short e)
             {
                 zoom_position p = new zoom_position();
@@ -597,6 +702,24 @@ namespace visca
                 get { return create_from_encoder_count(zoom_values[0].Item2); }  // 0x0000 in the manual
             }
         }
+        public class readonly_zoom_position
+        {
+            private zoom_position pos = new zoom_position();
+
+            public readonly_zoom_position(zoom_position rhs)
+            {
+                pos.deep_clone(rhs);
+            }
+
+            public short encoder_count
+            {
+                get { return pos.encoder_count; }
+            }
+            public double ratio
+            {
+                get { return pos.ratio; }
+            }
+        }
         public static int hardware_maximum_pan_tilt_speed
         {
             get { return 17; }
@@ -616,73 +739,139 @@ namespace visca
         private pan_position _maximum_pan_angle = pan_position.hardware_maximum_pan_angle;
         public pan_position maximum_pan_angle
         {
-            get { return _maximum_pan_angle; }
+            get
+            {
+                pan_position result = new pan_position();
+                lock (command_buffer)
+                {
+                    result.deep_clone(_maximum_pan_angle);
+                }
+                return result;
+            }
             set
             {
-                if (value.encoder_count > minimum_pan_angle.encoder_count)
-                    _maximum_pan_angle = value;
-                else
-                    throw new System.ArgumentException("New maximum pan angle can't be less than current minimum pan angle");
+                lock (command_buffer)
+                {
+                    if (value.encoder_count > minimum_pan_angle.encoder_count)
+                        _maximum_pan_angle = value;
+                    else
+                        throw new System.ArgumentException("New maximum pan angle can't be less than current minimum pan angle");
+                }
             }
         }
         private pan_position _minimum_pan_angle = pan_position.hardware_minimum_pan_angle;
         public pan_position minimum_pan_angle
         {
-            get { return _minimum_pan_angle; }
+            get
+            {
+                pan_position result = new pan_position();
+                lock (command_buffer)
+                {
+                    result.deep_clone(_minimum_pan_angle);
+                }
+                return result;
+            }
             set
             {
-                if (value.encoder_count < maximum_pan_angle.encoder_count)
-                    _minimum_pan_angle = value;
-                else
-                    throw new System.ArgumentException("New minimum pan angle can't be greater than current maximum pan angle");
+                lock (command_buffer)
+                {
+                    if (value.encoder_count < maximum_pan_angle.encoder_count)
+                        _minimum_pan_angle = value;
+                    else
+                        throw new System.ArgumentException("New minimum pan angle can't be greater than current maximum pan angle");
+                }
             }
         }
         private tilt_position _maximum_tilt_angle = tilt_position.hardware_maximum_tilt_angle;
         public tilt_position maximum_tilt_angle
         {
-            get { return _maximum_tilt_angle; }
+            get
+            {
+                tilt_position result = new tilt_position();
+                lock (command_buffer)
+                {
+                    result.deep_clone(_maximum_tilt_angle);
+                }
+                return result;
+            }
             set
             {
-                if (value.encoder_count > minimum_tilt_angle.encoder_count)
-                    _maximum_tilt_angle = value;
-                else
-                    throw new System.ArgumentException("New maximum tilt angle can't be less than current minimum tilt angle");
+                lock (command_buffer)
+                {
+                    if (value.encoder_count > minimum_tilt_angle.encoder_count)
+                        _maximum_tilt_angle = value;
+                    else
+                        throw new System.ArgumentException("New maximum tilt angle can't be less than current minimum tilt angle");
+                }
             }
         }
         private tilt_position _minimum_tilt_angle = tilt_position.hardware_minimum_tilt_angle;
         public tilt_position minimum_tilt_angle
         {
-            get { return _minimum_tilt_angle; }
+            get
+            {
+                tilt_position result = new tilt_position();
+                lock (command_buffer)
+                {
+                    result.deep_clone(_minimum_tilt_angle);
+                }
+                return result;
+            }
             set
             {
-                if (value.encoder_count < maximum_tilt_angle.encoder_count)
-                    _minimum_tilt_angle = value;
-                else
-                    throw new System.ArgumentException("New minimum tilt angle can't be greater than current maximum tilt angle");
+                lock (command_buffer)
+                {
+                    if (value.encoder_count < maximum_tilt_angle.encoder_count)
+                        _minimum_tilt_angle = value;
+                    else
+                        throw new System.ArgumentException("New minimum tilt angle can't be greater than current maximum tilt angle");
+                }
             }
         }
         private zoom_position _maximum_zoom_ratio = zoom_position.create_from_ratio(18);  // Limiting the default to the optical zoom only (everything above 18x is digital)
         public zoom_position maximum_zoom_ratio
         {
-            get { return _maximum_zoom_ratio; }
+            get
+            {
+                zoom_position result = new zoom_position();
+                lock (command_buffer)
+                {
+                    result.deep_clone(_maximum_zoom_ratio);
+                }
+                return result;
+            }
             set
             {
-                if (value.encoder_count > minimum_zoom_ratio.encoder_count)
-                    _maximum_zoom_ratio = value;
-                else
-                    throw new System.ArgumentException("New maximum zoom ratio can't be less than current minimum zoom ratio");
+                lock (command_buffer)
+                {
+                    if (value.encoder_count > minimum_zoom_ratio.encoder_count)
+                        _maximum_zoom_ratio = value;
+                    else
+                        throw new System.ArgumentException("New maximum zoom ratio can't be less than current minimum zoom ratio");
+                }
             }
         }
         private zoom_position _minimum_zoom_ratio = zoom_position.hardware_minimum_zoom_ratio;
         public zoom_position minimum_zoom_ratio
         {
-            get { return _minimum_zoom_ratio; }
+            get
+            {
+                zoom_position result = new zoom_position();
+                lock (command_buffer)
+                {
+                    result.deep_clone(_minimum_zoom_ratio);
+                }
+                return result;
+            }
             set
             {
-                if (value.encoder_count < maximum_zoom_ratio.encoder_count)
-                    _minimum_zoom_ratio = value;
-                else
-                    throw new System.ArgumentException("New minimum zoom ratio can't be greater than current maximum zoom ratio");
+                lock (command_buffer)
+                {
+                    if (value.encoder_count < maximum_zoom_ratio.encoder_count)
+                        _minimum_zoom_ratio = value;
+                    else
+                        throw new System.ArgumentException("New minimum zoom ratio can't be greater than current maximum zoom ratio");
+                }
             }
         }
 
@@ -844,9 +1033,45 @@ namespace visca
         }
         private DRIVE_STATUS pan_tilt_status { get; set; }
         private DRIVE_STATUS zoom_status { get; set; }
-        public angular_position pan { get; private set; }  // Note: we use angular position here so there is no error checking.  This is because the hardware can go beyond its documented limits by a bit
-        public angular_position tilt { get; private set; }  // Note: we use angular position here so there is no error checking.  This is because the hardware can go beyond its documented limits by a bit
-        public zoom_position zoom { get; private set; }
+        private angular_position _pan { get; set; }  // Note: we use angular position here so there is no error checking.  This is because the hardware can go beyond its documented limits by a bit
+        public readonly_angular_position pan
+        {
+            get
+            {
+                readonly_angular_position result;
+                lock (command_buffer)
+                {
+                    result = new readonly_angular_position(_pan);
+                }
+                return result;
+            }
+        }
+        private angular_position _tilt { get; set; }  // Note: we use angular position here so there is no error checking.  This is because the hardware can go beyond its documented limits by a bit
+        public readonly_angular_position tilt
+        {
+            get
+            {
+                readonly_angular_position result;
+                lock (command_buffer)
+                {
+                    result = new readonly_angular_position(_tilt);
+                }
+                return result;
+            }
+        }
+        private zoom_position _zoom { get; set; }
+        public readonly_zoom_position zoom
+        {
+            get
+            {
+                readonly_zoom_position result;
+                lock (command_buffer)
+                {
+                    result = new readonly_zoom_position(_zoom);
+                }
+                return result;
+            }
+        }
 
         // Command buffer
         public enum ZOOM_DIRECTION
@@ -1969,8 +2194,8 @@ namespace visca
                         {
                             Trace.WriteLine(DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " Command complete: " + dispatched_cmd.ToString());
                             dispatched_cmd = null;  // The inquiry command is in the dispatched_cmd variable (not in a socket)
-                            pan.encoder_count = temp_pan_enc;
-                            tilt.encoder_count = temp_tilt_enc;
+                            _pan.encoder_count = temp_pan_enc;
+                            _tilt.encoder_count = temp_tilt_enc;
 
                             serial_channel_open.Set();  // Signal the dispatch thread that its ok to start
                             pan_tilt_inquiry_complete.Set();  // Signal the after stop thread that its ok to use data now
@@ -1998,7 +2223,7 @@ namespace visca
                         {
                             Trace.WriteLine(DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " Command complete: " + dispatched_cmd.ToString());
                             dispatched_cmd = null;  // The inquiry command is in the dispatched_cmd variable (not in a socket)
-                            zoom.encoder_count = temp_zoom_enc;
+                            _zoom.encoder_count = temp_zoom_enc;
 
                             serial_channel_open.Set();  // Signal the dispatch thread that its ok to start
                             zoom_inquiry_complete.Set();  // Signal the after stop thread that its ok to use data now
@@ -2648,6 +2873,165 @@ namespace visca
             }
         }
 
+        // PID(ish) control
+        private void pid_data_changed(object sender, EventArgs e)
+        {
+            lock (command_buffer)
+            {
+                pid_data_turnstyle.Set();
+            }
+        }
+        private ManualResetEventSlim pid_turnstyle { get; set; }
+        private ManualResetEventSlim pid_data_turnstyle { get; set; }
+        public bool pid_control
+        {
+            get
+            {
+                return pid_turnstyle.IsSet;
+            }
+            set
+            {
+                if (value == true)
+                    pid_turnstyle.Set();
+                else
+                    pid_turnstyle.Reset();
+            }
+        }
+        private pan_position _pid_target_pan_position = new pan_position();
+        public pan_position pid_target_pan_position
+        {
+            get
+            {
+                lock (command_buffer)
+                {
+                    return _pid_target_pan_position;
+                }
+            }
+            private set
+            {
+                lock (command_buffer)
+                {
+                    _pid_target_pan_position = value;
+                }
+            }
+        }
+        private tilt_position _pid_target_tilt_position = new tilt_position();
+        public tilt_position pid_target_tilt_position
+        {
+            get
+            {
+                lock (command_buffer)
+                {
+                    return _pid_target_tilt_position;
+                }
+            }
+            private set
+            {
+                lock (command_buffer)
+                {
+                    _pid_target_tilt_position = value;
+                }
+            }
+        }
+        private zoom_position _pid_target_zoom_position = new zoom_position();
+        public zoom_position pid_target_zoom_position
+        {
+            get
+            {
+                lock (command_buffer)
+                {
+                    return _pid_target_zoom_position;
+                }
+            }
+            private set
+            {
+                lock (command_buffer)
+                {
+                    _pid_target_zoom_position = value;
+                }
+            }
+        }
+        private int _pid_pan_tilt_speed;
+        public int pid_pan_tilt_speed
+        {
+            get
+            {
+                return _pid_pan_tilt_speed;
+            }
+            set
+            {
+                if (value >= hardware_maximum_pan_tilt_speed || value <= hardware_minimum_pan_tilt_speed)
+                    throw new System.ArgumentException("Invalid speed for pan/tilt drive");
+
+                _pid_pan_tilt_speed = value;
+            }
+        }
+        private int _pid_zoom_speed;
+        public int pid_zoom_speed
+        {
+            get
+            {
+                return _pid_zoom_speed;
+            }
+            set
+            {
+                if (value >= hardware_maximum_zoom_speed || value <= hardware_minimum_zoom_speed)
+                    throw new System.ArgumentException("Invalid speed for zoom drive");
+
+                _pid_zoom_speed = value;
+            }
+        }
+        private Thread pid_thread { get; set; }
+        private void pid()
+        {
+            bool pid_was_active = false;
+            while (true)
+            {
+                try
+                {
+                    if (!pid_turnstyle.IsSet && pid_was_active)  // PID movement was active, but now the user wants it to stop...
+                    {
+                        emergency_stop();  // Before we wait, we need to stop the camera
+                        pid_was_active = false;
+                    }
+
+                    pid_turnstyle.Wait(thread_control.Token);  // Wait for PID control to be enabled
+                    pid_data_turnstyle.Wait(thread_control.Token);  // Wait for data to change
+
+                    double pan_error;
+                    double tilt_error;
+                    double zoom_error;
+                    lock (command_buffer)
+                    {
+                        pan_error = pid_target_pan_position.degrees - pan.degrees;
+                        tilt_error = pid_target_tilt_position.degrees - tilt.degrees;
+                        zoom_error = pid_target_zoom_position.ratio - zoom.ratio;
+                        pid_data_turnstyle.Reset();  // Handled current data
+                    }
+                    if (Math.Abs(pan_error) > 5 || Math.Abs(tilt_error) > 5)  // Off by more than 5 degrees in some direction
+                    {
+                        double temp = Math.Atan2(tilt_error, pan_error);
+                        jog_pan_tilt_radians(_pid_pan_tilt_speed, Math.Atan2(tilt_error, pan_error));
+                    }
+                    else  // Pan/tilt is close enough
+                        stop_pan_tilt();
+                    if (zoom_error > 0.2)  // Need to zoom in
+                        jog_zoom(_pid_zoom_speed, ZOOM_DIRECTION.IN);
+                    else if (zoom_error < -0.2)  // Need to zoom in
+                        jog_zoom(_pid_zoom_speed, ZOOM_DIRECTION.OUT);
+                    else  // Zoom is close enough
+                        stop_zoom();
+
+                    pid_was_active = true;
+                }
+                catch (OperationCanceledException)
+                {
+                    Trace.WriteLine("PID thread terminated");
+                    return;
+                }
+            }
+        }
+
         // Constructors
         public EVI_D70()
         {
@@ -2656,13 +3040,13 @@ namespace visca
             hardware_connected = false;
             thread_control = new CancellationTokenSource();
             initilization_error = false;
-            pan = new angular_position();
-            tilt = new angular_position();
-            zoom = new zoom_position();
             serial_channel_open = new ManualResetEventSlim(true);
             socket_available = new ManualResetEventSlim(true);
             command_buffer = new ObservableCollection<command>();
             emergency_stop_turnstyle = new ManualResetEventSlim(false);
+            _pan = new angular_position();
+            _tilt = new angular_position();
+            _zoom = new zoom_position();
             pan_tilt_status = DRIVE_STATUS.FULL_STOP;
             zoom_status = DRIVE_STATUS.FULL_STOP;
             last_inquiry_was_pan_tilt = false;
@@ -2691,6 +3075,19 @@ namespace visca
             zoom_inquiry_complete = new ManualResetEventSlim(false);
             dispatch_thread = new Thread(new ThreadStart(dispatch));
             receive_thread = new Thread(new ThreadStart(receive));
+
+            // PID
+            pid_thread = new Thread(new ThreadStart(pid));
+            pid_turnstyle = new ManualResetEventSlim(false);
+            pid_data_turnstyle = new ManualResetEventSlim(true);
+            pid_pan_tilt_speed = (new pan_tilt_jog_command(1)).pan_tilt_speed;
+            pid_zoom_speed = (new zoom_jog_command(1)).zoom_speed;
+            _pan.position_changed += new EventHandler<EventArgs>(pid_data_changed);
+            _tilt.position_changed += new EventHandler<EventArgs>(pid_data_changed);
+            _zoom.position_changed += new EventHandler<EventArgs>(pid_data_changed);
+            _pid_target_pan_position.position_changed += new EventHandler<EventArgs>(pid_data_changed);
+            _pid_target_tilt_position.position_changed += new EventHandler<EventArgs>(pid_data_changed);
+            _pid_target_zoom_position.position_changed += new EventHandler<EventArgs>(pid_data_changed);
         }
         public EVI_D70(String port_name)
             : this()
@@ -2781,6 +3178,7 @@ namespace visca
                 receive_thread.Start();
                 dispatch_thread.Start();
                 inquiry_after_stop_thread.Start();
+                pid_thread.Start();
             }
 
             return hardware_connected;
