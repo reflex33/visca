@@ -1,17 +1,5 @@
 # c# Control of a VISCA Camera
-
-## v1.0 Initial build
-First complete version included with autoendoscope software.  This version is very simplistic with no dual socket support and no threading.
-
-## v2.0 alpha
-First version using multiple threads for send/receive.  Receive thread is incomplete.
-
-## v2.0
-First complete version using threads.  Receive thread is complete!
-
-## v3.0
-PID(ish) control added.
-Fixed a bug where user had access to backing pan/tilt/zoom positions.  These variables are now read-only.
+This is a library for controlling a VISCA camera using c#.
 
 ## Notes on this class
 1. Does not resend commands that are the same as the previously completed command.  This prevents the software from wasting time sending commands that are not needed.
@@ -26,6 +14,19 @@ Fixed a bug where user had access to backing pan/tilt/zoom positions.  These var
 10. IMPORTANT!!!!! - After any of the following errors, you should call "Dispose."  At this point the serial communication is probably screwed and no more communication is possible.  This should be done in the event handler and as a begininvoke so that it runs in your thread.  The errors in quesion: position_data_error, serial_port_error, command_error.  Other errors (such as requested_jog_limit_error) are not critical and normal operation is still fine.
 
 ## TODO
-1. When an absolute command is complete, if a new absolute command is inputted that is the same as the one that completed, it will get dispatched if there was any command that was completed between then and now.  This is because in the absolute commands only check if it currently is doing an absolute command and is the same as the previous before it throws out the new command.  Some way of keeping the previous completed absolute command is needed.
-2. When C# v6.0 comes out, convert the properties that are initialized in the constructor to make them initialized at the declaration.
-3. The error received code is preliminary and only stops movmement from happening.  There should be a way to resend the command that produced the error.
+* When an absolute command is complete, if a new absolute command is inputted that is the same as the one that completed, it will get dispatched if there was any command that was completed between then and now.  This is because in the absolute commands only check if it currently is doing an absolute command and is the same as the previous before it throws out the new command.  Some way of keeping the previous completed absolute command is needed.
+* When C# v6.0 comes out, convert the properties that are initialized in the constructor to make them initialized at the declaration.
+* The error received code is preliminary and only stops movmement from happening.  There should be a way to resend the command that produced the error.
+
+## 4/7/2015
+PID(ish) control added.
+Fixed a bug where user had access to backing pan/tilt/zoom positions.  These variables are now read-only.
+
+## v2.0
+First complete version using threads.  Receive thread is complete!
+
+## v2.0 alpha
+First version using multiple threads for send/receive.  Receive thread is incomplete.
+
+## v1.0 Initial build
+First complete version included with autoendoscope software.  This version is very simplistic with no dual socket support and no threading.
