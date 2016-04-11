@@ -17,17 +17,3 @@ This is a library for controlling a VISCA camera using c#.
 * When an absolute command is complete, if a new absolute command is inputted that is the same as the one that completed, it will get dispatched if there was any command that was completed between then and now.  This is because in the absolute commands only check if it currently is doing an absolute command and is the same as the previous before it throws out the new command.  Some way of keeping the previous completed absolute command is needed.
 * When C# v6.0 comes out, convert the properties that are initialized in the constructor to make them initialized at the declaration.
 * The error received code is preliminary and only stops movmement from happening.  There should be a way to resend the command that produced the error.
-
-## Changelog
-### 2015.04.07
-PID(ish) control added.
-Fixed a bug where user had access to backing pan/tilt/zoom positions.  These variables are now read-only.
-
-### v2.0
-First complete version using threads.  Receive thread is complete!
-
-### v2.0 alpha
-First version using multiple threads for send/receive.  Receive thread is incomplete.
-
-### v1.0 Initial build
-First complete version included with autoendoscope software.  This version is very simplistic with no dual socket support and no threading.
