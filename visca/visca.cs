@@ -3017,7 +3017,7 @@ namespace visca
                         stop_pan_tilt();
                     if (zoom_error > 0.2)  // Need to zoom in
                         jog_zoom(_pid_zoom_speed, ZOOM_DIRECTION.IN);
-                    else if (zoom_error < -0.2)  // Need to zoom in
+                    else if (zoom_error < -0.2)  // Need to zoom out
                         jog_zoom(_pid_zoom_speed, ZOOM_DIRECTION.OUT);
                     else  // Zoom is close enough
                         stop_zoom();
