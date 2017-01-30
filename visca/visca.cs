@@ -1449,6 +1449,13 @@ namespace visca
                 _minimum_zoom_ratio = value;
             }
         }
+
+        // Camera status
+        private DRIVE_STATUS pan_tilt_status { get; set; }
+        private DRIVE_STATUS zoom_status { get; set; }
+        public angular_position pan { get; private set; }
+        public angular_position tilt { get; private set; }
+        public zoom_position zoom { get; private set; }
     }
 
     public class EVI_D70 : visca_camera
