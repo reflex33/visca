@@ -199,10 +199,211 @@ namespace visca
             ABSOLUTE = 3,
             STOP_ABSOLUTE = 4
         }
+
+        public class angular_position
+        {
+            private short _encoder_count = 0;
+            private double _radians = 0;
+
+            public short encoder_count
+            {
+                get { return _encoder_count; }
+                internal set
+                {
+                    _encoder_count = value;
+                    _radians = value * 0.075 * (Math.PI / 180.0);
+                    if (position_changed != null) position_changed(this, EventArgs.Empty);  // Event triggered for data changed
+                }
+            }
+            public double radians
+            {
+                get { return _radians; }
+                internal set
+                {
+                    _radians = value;
+                    _encoder_count = (short)Math.Round(value * (180.0 / Math.PI) / 0.075);  // Convert to encoder counts
+                    if (position_changed != null) position_changed(this, EventArgs.Empty);  // Event triggered for data changed
+                }
+            }
+            public double degrees
+            {
+                get { return _radians * (180.0 / Math.PI); }
+                internal set
+                {
+                    _radians = value * (Math.PI / 180.0);
+                    _encoder_count = (short)Math.Round(value / 0.075);  // Convert to encoder counts
+                    if (position_changed != null) position_changed(this, EventArgs.Empty);  // Event triggered for data changed
+                }
+            }
+
+            public angular_position() { }
+            public angular_position(angular_position rhs)
+            {
+                encoder_count = rhs.encoder_count;
+                radians = rhs.radians;
+            }
+            public override bool Equals(object obj)
+            {
+                if (obj == null)
+                    return false;
+
+                // Check if types match, ensures symmetry
+                if (typeof(angular_position) != obj.GetType())
+                    return false;
+
+                /// If the object cannot be cast as a angular_position, return false.  Note: this should never happen
+                angular_position pos = obj as angular_position;
+                if (pos == null)
+                    return false;
+
+                return encoder_count == pos.encoder_count;
+            }
+            public override int GetHashCode()
+            {
+                return _encoder_count.GetHashCode();
+            }
+
+            public event EventHandler<EventArgs> position_changed;
+
+            public static angular_position create_from_encoder_count(short e)
+            {
+                angular_position p = new angular_position();
+                p.encoder_count = e;
+                return p;
+            }
+            public static angular_position create_from_radians(double r)
+            {
+                angular_position p = new angular_position();
+                p.radians = r;
+                return p;
+            }
+            public static angular_position create_from_degrees(double d)
+            {
+                angular_position p = new angular_position();
+                p.degrees = d;
+                return p;
+            }
+        }
+        public class zoom_position
+        {
+            internal static Tuple<double, short>[] zoom_values = new Tuple<double, short>[29]  // Zoom ratios and their associated encoder counts (in decimal)
+            {
+                Tuple.Create( 1.0,  (short)    0),
+                Tuple.Create( 2.0,  (short) 5638),
+                Tuple.Create( 3.0,  (short) 8529),
+                Tuple.Create( 4.0,  (short)10336),
+                Tuple.Create( 5.0,  (short)11445),
+                Tuple.Create( 6.0,  (short)12384),
+                Tuple.Create( 7.0,  (short)13011),
+                Tuple.Create( 8.0,  (short)13637),
+                Tuple.Create( 9.0,  (short)14119),
+                Tuple.Create(10.0,  (short)14505),
+                Tuple.Create(11.0,  (short)14914),
+                Tuple.Create(12.0,  (short)15179),
+                Tuple.Create(13.0,  (short)15493),
+                Tuple.Create(14.0,  (short)15733),
+                Tuple.Create(15.0,  (short)15950),
+                Tuple.Create(16.0,  (short)16119),
+                Tuple.Create(17.0,  (short)16288),
+                Tuple.Create(18.0,  (short)16384),
+                Tuple.Create(36.0,  (short)24576),
+                Tuple.Create(54.0,  (short)27264),
+                Tuple.Create(72.0,  (short)28672),
+                Tuple.Create(90.0,  (short)29504),
+                Tuple.Create(108.0, (short)30016),
+                Tuple.Create(126.0, (short)30400),
+                Tuple.Create(144.0, (short)30720),
+                Tuple.Create(162.0, (short)30976),
+                Tuple.Create(180.0, (short)31104),
+                Tuple.Create(198.0, (short)31296),
+                Tuple.Create(216.0, (short)31424)
+            };
+
+            private short _encoder_count = zoom_values[0].Item2;
+            private double _zoom_ratio = zoom_values[0].Item1;
+
+            public short encoder_count
+            {
+                get { return _encoder_count; }
+                internal set
+                {
+                    for (int i = 0; i < zoom_values.Length; ++i)
+                        if (value >= zoom_values[i].Item2 && value <= zoom_values[i + 1].Item2)
+                        {
+                            _zoom_ratio = ((zoom_values[i + 1].Item1 - zoom_values[i].Item1) / (zoom_values[i + 1].Item2 - zoom_values[i].Item2)) * (value - zoom_values[i].Item2) + zoom_values[i].Item1;
+                            _encoder_count = value;
+                            if (position_changed != null) position_changed(this, EventArgs.Empty);  // Event triggered for data changed
+                            return;
+                        }
+
+                    throw new ResultOutOfRange("Zoom encoder count outside expected range");
+                }
+            }
+            public double ratio
+            {
+                get { return _zoom_ratio; }
+                internal set
+                {
+                    for (int i = 0; i < zoom_values.Length; ++i)
+                        if (value >= zoom_values[i].Item1 && value <= zoom_values[i + 1].Item1)
+                        {
+                            _encoder_count = (short)Math.Round(((zoom_values[i + 1].Item2 - zoom_values[i].Item2) / (zoom_values[i + 1].Item1 - zoom_values[i].Item1)) * (value - zoom_values[i].Item1) + zoom_values[i].Item2);
+                            _zoom_ratio = value;
+                            if (position_changed != null) position_changed(this, EventArgs.Empty);  // Event triggered for data changed
+                            return;
+                        }
+
+                    throw new ResultOutOfRange("Zoom ratio outside expected range");
+                }
+            }
+
+            public zoom_position() { }
+            public zoom_position(zoom_position rhs)
+            {
+                encoder_count = rhs.encoder_count;
+                ratio = rhs.ratio;
+            }
+            public override bool Equals(object obj)
+            {
+                if (obj == null)
+                    return false;
+
+                // Check if types match, ensures symmetry
+                if (typeof(zoom_position) != obj.GetType())
+                    return false;
+
+                /// If the object cannot be cast as a zoom_position, return false.  Note: this should never happen
+                zoom_position pos = obj as zoom_position;
+                if (pos == null)
+                    return false;
+
+                return encoder_count == pos.encoder_count;
+            }
+            public override int GetHashCode()
+            {
+                return _encoder_count.GetHashCode();
+            }
+
+            public event EventHandler<EventArgs> position_changed;
+
+            public static zoom_position create_from_encoder_count(short e)
+            {
+                zoom_position p = new zoom_position();
+                p.encoder_count = e;
+                return p;
+            }
+            public static zoom_position create_from_ratio(double r)
+            {
+                zoom_position p = new zoom_position();
+                p.ratio = r;
+                return p;
+            }
+        }
     }
 
     public class EVI_D70 : visca_camera
     {
+        /*
         [Serializable]
         public class ResultOutOfRange : Exception
         {
@@ -3212,5 +3413,6 @@ namespace visca
 
             return hardware_connected;
         }
+        */
     }
 }
