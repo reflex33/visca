@@ -172,7 +172,36 @@ namespace visca
         public const Byte PT_DATASCREEN_INQ = 0x06;
     }
 
-    public class EVI_D70 : IDisposable
+    public class visca_camera : IDisposable
+    {
+        public class ResultOutOfRange : Exception
+        {
+            public ResultOutOfRange() { }
+            public ResultOutOfRange(string message) : base(message) { }
+            public ResultOutOfRange(string message, Exception inner) : base(message, inner) { }
+            protected ResultOutOfRange(
+              System.Runtime.Serialization.SerializationInfo info,
+              System.Runtime.Serialization.StreamingContext context)
+                : base(info, context) { }
+        }
+
+        public enum ZOOM_DIRECTION
+        {
+            IN = 0,
+            OUT = 1,
+            NONE = 2
+        }
+        private enum DRIVE_STATUS
+        {
+            FULL_STOP = 0,
+            JOG = 1,
+            STOP_JOG = 2,
+            ABSOLUTE = 3,
+            STOP_ABSOLUTE = 4
+        }
+    }
+
+    public class EVI_D70 : visca_camera
     {
         [Serializable]
         public class ResultOutOfRange : Exception
