@@ -400,6 +400,11 @@ namespace visca
             }
         }
 
+        // Serial connection
+        private SerialPort port { get; set; }
+        private int camera_num { get; set; }
+        public bool hardware_connected { get; private set; }
+
         // Camera commands
         private class command
         {
