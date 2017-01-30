@@ -1363,6 +1363,92 @@ namespace visca
         {
             get { return zoom_position.create_from_encoder_count(zoom_position.zoom_values[0].Item2); }
         }
+
+        // User defined position limits
+        private angular_position _maximum_pan_angle;
+        public angular_position maximum_pan_angle
+        {
+            get { return _maximum_pan_angle; }
+            set
+            {
+                if (value.encoder_count < minimum_pan_angle.encoder_count)
+                    throw new System.ArgumentException("New maximum pan angle can't be less than current minimum pan angle");
+                if (value.encoder_count > hardware_maximum_pan_angle.encoder_count)
+                    throw new System.ArgumentException("New maximum pan angle can't be greater than the hardware maximum pan angle");
+
+                _maximum_pan_angle = value;
+            }
+        }
+        private angular_position _minimum_pan_angle;
+        public angular_position minimum_pan_angle
+        {
+            get { return _minimum_pan_angle; }
+            set
+            {
+                if (value.encoder_count > maximum_pan_angle.encoder_count)
+                    throw new System.ArgumentException("New minimum pan angle can't be greater than current maximum pan angle");
+                if (value.encoder_count < hardware_minimum_pan_angle.encoder_count)
+                    throw new System.ArgumentException("New minimum pan angle can't be less than the hardware minimum pan angle");
+
+                _minimum_pan_angle = value;
+            }
+        }
+        private angular_position _maximum_tilt_angle;
+        public angular_position maximum_tilt_angle
+        {
+            get { return _maximum_tilt_angle; }
+            set
+            {
+                if (value.encoder_count < minimum_tilt_angle.encoder_count)
+                    throw new System.ArgumentException("New maximum tilt angle can't be less than current minimum tilt angle");
+                if (value.encoder_count > hardware_maximum_tilt_angle.encoder_count)
+                    throw new System.ArgumentException("New maximum tilt angle can't be greater than hardware maximum tilt angle");
+
+                _maximum_tilt_angle = value;
+            }
+        }
+        private angular_position _minimum_tilt_angle;
+        public angular_position minimum_tilt_angle
+        {
+            get { return _minimum_tilt_angle; }
+            set
+            {
+                if (value.encoder_count > maximum_tilt_angle.encoder_count)
+                    throw new System.ArgumentException("New minimum tilt angle can't be greater than current maximum tilt angle");
+                if (value.encoder_count < hardware_minimum_tilt_angle.encoder_count)
+                    throw new System.ArgumentException("New minimum tilt angle can't be less than hardware minimum tilt angle");
+
+                _minimum_tilt_angle = value;
+            }
+        }
+        private zoom_position _maximum_zoom_ratio;
+        public zoom_position maximum_zoom_ratio
+        {
+            get { return _maximum_zoom_ratio; }
+            set
+            {
+                if (value.encoder_count < minimum_zoom_ratio.encoder_count)
+                    throw new System.ArgumentException("New maximum zoom ratio can't be less than current minimum zoom ratio");
+                if (value.encoder_count > hardware_maximum_zoom_ratio.encoder_count)
+                    throw new System.ArgumentException("New maximum zoom ratio can't be greater than hardware maximum zoom ratio");
+
+                _maximum_zoom_ratio = value;
+            }
+        }
+        private zoom_position _minimum_zoom_ratio;
+        public zoom_position minimum_zoom_ratio
+        {
+            get { return _minimum_zoom_ratio; }
+            set
+            {
+                if (value.encoder_count > maximum_zoom_ratio.encoder_count)
+                    throw new System.ArgumentException("New minimum zoom ratio can't be greater than current maximum zoom ratio");
+                if (value.encoder_count < hardware_minimum_zoom_ratio.encoder_count)
+                    throw new System.ArgumentException("New minimum zoom ratio can't be less than hardware minimum zoom ratio");
+
+                _minimum_zoom_ratio = value;
+            }
+        }
     }
 
     public class EVI_D70 : visca_camera
