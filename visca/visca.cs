@@ -1461,6 +1461,63 @@ namespace visca
         public angular_position pan { get; private set; }
         public angular_position tilt { get; private set; }
         public zoom_position zoom { get; private set; }
+
+        public visca_camera()
+        {
+            // Create serial port
+            port = new SerialPort();
+            hardware_connected = false;
+
+            // Default maximum and minimum angles/ratios
+            _maximum_pan_angle = hardware_maximum_pan_angle;
+            _minimum_pan_angle = hardware_minimum_pan_angle;
+            _maximum_tilt_angle = hardware_maximum_tilt_angle;
+            _minimum_tilt_angle = hardware_minimum_tilt_angle;
+            _maximum_zoom_ratio = hardware_maximum_zoom_ratio;
+            _minimum_zoom_ratio = hardware_minimum_zoom_ratio;
+
+            // Create variables for drive status
+            pan_tilt_status = DRIVE_STATUS.FULL_STOP;
+            zoom_status = DRIVE_STATUS.FULL_STOP;
+            pan = new angular_position();
+            tilt = new angular_position();
+            zoom = new zoom_position();
+        }
+        public override bool Equals(object obj)
+        {
+            if (obj == null)
+                return false;
+
+            // Check if types match, ensures symmetry
+            if (typeof(command) != obj.GetType())
+                return false;
+
+            // If the object cannot be cast as a visca_camera, return false.  Note: this should never happen
+            visca_camera c = obj as visca_camera;
+            if (c == null)
+                return false;
+
+            if (hardware_maximum_pan_tilt_speed == c.hardware_maximum_pan_tilt_speed &&
+                 hardware_minimum_pan_tilt_speed == c.hardware_minimum_pan_tilt_speed &&
+                 hardware_maximum_zoom_speed == c.hardware_maximum_zoom_speed &&
+                 hardware_minimum_zoom_speed == c.hardware_minimum_zoom_speed &&
+                 hardware_maximum_pan_angle.Equals(c.hardware_maximum_pan_angle) &&
+                 hardware_minimum_pan_angle.Equals(c.hardware_minimum_pan_angle) &&
+                 hardware_maximum_tilt_angle.Equals(c.hardware_maximum_tilt_angle) &&
+                 hardware_minimum_tilt_angle.Equals(c.hardware_minimum_tilt_angle) &&
+                 hardware_maximum_zoom_ratio.Equals(c.hardware_maximum_zoom_ratio) &&
+                 hardware_minimum_zoom_ratio.Equals(c.hardware_minimum_zoom_ratio) &&
+                 _maximum_pan_angle.Equals(c._maximum_pan_angle) &&
+                 _minimum_pan_angle.Equals(c._minimum_pan_angle) &&
+                 _maximum_tilt_angle.Equals(c._maximum_tilt_angle) &&
+                 _minimum_tilt_angle.Equals(c._minimum_tilt_angle) &&
+                 _maximum_zoom_ratio.Equals(c._maximum_zoom_ratio) &&
+                 _minimum_zoom_ratio.Equals(c._minimum_zoom_ratio))
+                return true;
+            else
+                return false;
+        }
+
     }
 
     public class EVI_D70 : visca_camera
