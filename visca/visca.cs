@@ -1321,10 +1321,95 @@ namespace visca
                 return base.ToStringDetail();
             }
         }
+
+        // Hardware limits.  These values are all 0s and actual hardware limits are in derived classes
+        public virtual int hardware_maximum_pan_tilt_speed
+        {
+            get { return 0; }
+        }
+        public virtual int hardware_minimum_pan_tilt_speed
+        {
+            get { return 0; }
+        }
+        public virtual int hardware_maximum_zoom_speed
+        {
+            get { return 0; }
+        }
+        public virtual int hardware_minimum_zoom_speed
+        {
+            get { return 0; }
+        }
+        public virtual angular_position hardware_maximum_pan_angle
+        {
+            get { return angular_position.create_from_encoder_count(0); }
+        }
+        public virtual angular_position hardware_minimum_pan_angle
+        {
+            get { return angular_position.create_from_encoder_count(0); }
+        }
+        public virtual angular_position hardware_maximum_tilt_angle
+        {
+            get { return angular_position.create_from_degrees(0); }
+        }
+        public virtual angular_position hardware_minimum_tilt_angle
+        {
+            get { return angular_position.create_from_degrees(0); }
+        }
+        public virtual zoom_position hardware_maximum_zoom_ratio
+        {
+            get { return zoom_position.create_from_encoder_count(zoom_position.zoom_values[0].Item2); }
+        }
+        public virtual zoom_position hardware_minimum_zoom_ratio
+        {
+            get { return zoom_position.create_from_encoder_count(zoom_position.zoom_values[0].Item2); }
+        }
     }
 
     public class EVI_D70 : visca_camera
     {
+        // Hardware limits
+        public override int hardware_maximum_pan_tilt_speed
+        {
+            get { return 17; }
+        }
+        public override int hardware_minimum_pan_tilt_speed
+        {
+            get { return 1; }
+        }
+        public override int hardware_maximum_zoom_speed
+        {
+            get { return 7; }
+        }
+        public override int hardware_minimum_zoom_speed
+        {
+            get { return 2; }
+        }
+        public override angular_position hardware_maximum_pan_angle
+        {
+            get { return angular_position.create_from_encoder_count(2267); }  // 0x08DB in the manual
+        }
+        public override angular_position hardware_minimum_pan_angle
+        {
+            get { return angular_position.create_from_encoder_count(-2267); }  // 0xF725 in the manual
+        }
+        public override angular_position hardware_maximum_tilt_angle
+        {
+            get { return angular_position.create_from_degrees(88); }  // 0x04B0 in the manual, which is 90 degrees, but the camera can't reach that far
+        }
+        public override angular_position hardware_minimum_tilt_angle
+        {
+            get { return angular_position.create_from_degrees(-27); }  // 0xFE70 in the manual, which is -30 degrees, but the camera can't reach that far
+        }
+        public override zoom_position hardware_maximum_zoom_ratio
+        {
+            // Limiting the default to the optical zoom only (everything above 18x is digital)
+            get { return zoom_position.create_from_encoder_count(zoom_position.zoom_values[17].Item2); }
+        }
+        public override zoom_position hardware_minimum_zoom_ratio
+        {
+            get { return zoom_position.create_from_encoder_count(zoom_position.zoom_values[0].Item2); }
+        }
+
         /*
         [Serializable]
         public class ResultOutOfRange : Exception
