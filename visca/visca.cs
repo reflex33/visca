@@ -405,6 +405,12 @@ namespace visca
         private int camera_num;
         public bool hardware_connected { get; private set; } = false;
 
+        // Code control turnstyles
+        private ManualResetEventSlim serial_channel_open { get; set; } = new ManualResetEventSlim(true);
+        private ManualResetEventSlim socket_available { get; set; } = new ManualResetEventSlim(true);
+        private ManualResetEventSlim command_buffer_populated { get; set; } = new ManualResetEventSlim(false);  // This event is used to indicate that something is in the command buffer
+        private ManualResetEventSlim emergency_stop_turnstyle { get; set; } = new ManualResetEventSlim(false);
+
         // Camera commands
         private class command
         {
