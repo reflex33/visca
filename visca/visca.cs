@@ -478,7 +478,7 @@ namespace visca
             }
             public virtual string ToStringDetail()
             {
-                return ToString() + " " + "CameraNumber:" + command_camera_num;
+                return ToString() + Environment.NewLine + "                        " + "CameraNumber:" + command_camera_num;
             }
         }
         private class connect_command  // This does not inherent from command because it doesn't need camera number
@@ -704,7 +704,7 @@ namespace visca
             }
             public override string ToStringDetail()
             {
-                return base.ToStringDetail() + " " + "Direction(degrees):" + direction_deg + " " + "Pan/TiltSpeed:" + pan_tilt_speed;
+                return base.ToStringDetail() + Environment.NewLine + "                        " + "Direction(degrees):" + direction_deg + " " + "Pan/TiltSpeed:" + pan_tilt_speed;
             }
         }
         private class pan_tilt_stop_jog_command : command
@@ -875,7 +875,7 @@ namespace visca
             }
             public override string ToStringDetail()
             {
-                return base.ToStringDetail() + " " + "PanPosition(degrees):" + pan_pos.degrees + " " + "TiltPosition(degrees):" + tilt_pos.degrees + " " + "Pan/TiltSpeed:" + pan_tilt_speed;
+                return base.ToStringDetail() + Environment.NewLine + "                        " + "PanPosition(degrees):" + pan_pos.degrees + " " + "TiltPosition(degrees):" + tilt_pos.degrees + " " + "Pan/TiltSpeed:" + pan_tilt_speed;
             }
         }
         private class pan_tilt_cancel_command : command
@@ -944,7 +944,7 @@ namespace visca
             }
             public override string ToStringDetail()
             {
-                return base.ToStringDetail() + " " + "SocketNumber:" + socket_num;
+                return base.ToStringDetail() + Environment.NewLine + "                        " + "SocketNumber:" + socket_num;
             }
         }
         private class pan_tilt_inquiry_command : command
@@ -1082,7 +1082,7 @@ namespace visca
                     d = "OUT";
                 else // if (direction == ZOOM_DIRECTION.NONE)
                     d = "NONE";
-                return base.ToStringDetail() + " " + "ZoomDirection:" + d + " " + "ZoomSpeed:" + zoom_speed;
+                return base.ToStringDetail() + Environment.NewLine + "                        " + "ZoomDirection:" + d + " " + "ZoomSpeed:" + zoom_speed;
             }
         }
         private class zoom_stop_jog_command : command
@@ -1209,7 +1209,7 @@ namespace visca
             }
             public override string ToStringDetail()
             {
-                return base.ToStringDetail() + " " + "ZoomPosition(ratio):" + zoom_pos.ratio;
+                return base.ToStringDetail() + Environment.NewLine + "                        " + "ZoomPosition(ratio):" + zoom_pos.ratio;
             }
         }
         private class zoom_cancel_command : command
@@ -1278,7 +1278,7 @@ namespace visca
             }
             public override string ToStringDetail()
             {
-                return base.ToStringDetail() + " " + "SocketNumber:" + socket_num;
+                return base.ToStringDetail() + Environment.NewLine + "                        " + "SocketNumber:" + socket_num;
             }
         }
         private class zoom_inquiry_command : command
@@ -1382,6 +1382,7 @@ namespace visca
                     throw new System.ArgumentException("New maximum pan angle can't be greater than the hardware maximum pan angle");
 
                 _maximum_pan_angle = value;
+                Trace.WriteLine(DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " Maximum pan angle changed: " + _maximum_pan_angle.degrees + " degrees");
             }
         }
         private angular_position _minimum_pan_angle;
@@ -1396,6 +1397,7 @@ namespace visca
                     throw new System.ArgumentException("New minimum pan angle can't be less than the hardware minimum pan angle");
 
                 _minimum_pan_angle = value;
+                Trace.WriteLine(DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " Minimum pan angle changed: " + _minimum_pan_angle.degrees + " degrees");
             }
         }
         private angular_position _maximum_tilt_angle;
@@ -1410,6 +1412,7 @@ namespace visca
                     throw new System.ArgumentException("New maximum tilt angle can't be greater than hardware maximum tilt angle");
 
                 _maximum_tilt_angle = value;
+                Trace.WriteLine(DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " Maximum tilt angle changed: " + _maximum_tilt_angle.degrees + " degrees");
             }
         }
         private angular_position _minimum_tilt_angle;
@@ -1424,6 +1427,7 @@ namespace visca
                     throw new System.ArgumentException("New minimum tilt angle can't be less than hardware minimum tilt angle");
 
                 _minimum_tilt_angle = value;
+                Trace.WriteLine(DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " Minimum tilt angle changed: " + _minimum_tilt_angle.degrees + " degrees");
             }
         }
         private zoom_position _maximum_zoom_ratio;
@@ -1438,6 +1442,7 @@ namespace visca
                     throw new System.ArgumentException("New maximum zoom ratio can't be greater than hardware maximum zoom ratio");
 
                 _maximum_zoom_ratio = value;
+                Trace.WriteLine(DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " Maximum zoom ratio changed: " + _maximum_zoom_ratio.ratio);
             }
         }
         private zoom_position _minimum_zoom_ratio;
@@ -1452,6 +1457,7 @@ namespace visca
                     throw new System.ArgumentException("New minimum zoom ratio can't be less than hardware minimum zoom ratio");
 
                 _minimum_zoom_ratio = value;
+                Trace.WriteLine(DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " Minimum zoom ratio changed: " + _minimum_zoom_ratio.ratio);
             }
         }
 
@@ -1573,7 +1579,7 @@ namespace visca
                                     temp_tilt_enc > hardware_maximum_tilt_angle.encoder_count + tilt_range * 0.05 ||
                                     temp_tilt_enc < hardware_minimum_tilt_angle.encoder_count - tilt_range * 0.05)
                                 {
-                                    Trace.WriteLine(DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " Received invalid angles: " + dispatched_cmd.ToString());
+                                    Trace.WriteLine(DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " Position data error (received invalid pan/tilt angles): " + dispatched_cmd.ToString());
                                     failed_command = dispatched_cmd;
                                     dispatched_cmd = null;
                                     if (position_data_error != null) position_data_error(this, EventArgs.Empty);  // Inform the "user" that an error happened
@@ -1591,10 +1597,13 @@ namespace visca
                                     // Are we past the limit?
                                     if (pan.encoder_count > maximum_pan_angle.encoder_count || pan.encoder_count < minimum_pan_angle.encoder_count ||
                                         tilt.encoder_count > maximum_tilt_angle.encoder_count || tilt.encoder_count < minimum_tilt_angle.encoder_count)
+                                    {
+                                        Trace.WriteLine(DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " Pan/Tilt jog limit error (outside user specified limit)");
                                         if (pan_tilt_jog_limit_error != null) pan_tilt_jog_limit_error(this, EventArgs.Empty);  // Inform the "user" that we hit a limit
+                                    }
                                 }
                             }
-                            else if (response_buffer.Count == 7)  // Inquiry - zoom pos
+                            else if (response_buffer.Count == 7)  // Inquiry - zoom position
                             {
                                 int zoom_range = maximum_zoom_ratio.encoder_count - minimum_zoom_ratio.encoder_count;
                                 short temp_zoom_enc = (short)((response_buffer[2] << 12) | (response_buffer[3] << 8) | (response_buffer[4] << 4) | (response_buffer[5]));
@@ -1602,7 +1611,7 @@ namespace visca
                                 if (temp_zoom_enc > hardware_maximum_zoom_ratio.encoder_count + zoom_range * 0.05 ||  // Response outside of operating range (allowing for 5% over limits indicated in the manual)
                                     temp_zoom_enc < hardware_minimum_zoom_ratio.encoder_count - zoom_range * 0.05)
                                 {
-                                    Trace.WriteLine(DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " Received invalid ratio: " + dispatched_cmd.ToString());
+                                    Trace.WriteLine(DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " Position data error (received invalid zoom ratio): " + dispatched_cmd.ToString());
                                     failed_command = dispatched_cmd;
                                     dispatched_cmd = null;
                                     if (position_data_error != null) position_data_error(this, EventArgs.Empty);  // Inform the "user" that an error happened
@@ -1618,7 +1627,10 @@ namespace visca
 
                                     // Are we past the limit?
                                     if (zoom.encoder_count > maximum_zoom_ratio.encoder_count || zoom.encoder_count < minimum_zoom_ratio.encoder_count)
+                                    {
+                                        Trace.WriteLine(DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " Zoom jog limit error (outside user specified limit)");
                                         if (zoom_jog_limit_error != null) zoom_jog_limit_error(this, EventArgs.Empty);  // Inform the "user" that we hit a limit
+                                    }
                                 }
                             }
                             else if (response_buffer.Count == 3)  // Emergency stop complete
@@ -1652,6 +1664,7 @@ namespace visca
                                 temp = socket_two_cmd;
                             else  // The socket number is invalid
                             {
+                                Trace.WriteLine(DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " Command error (received invalid socket number)");
                                 if (command_error != null) command_error(this, EventArgs.Empty);  // Inform the "user" that there was an error
                                 return;
                             }
@@ -1713,7 +1726,6 @@ namespace visca
                     {
                         // This code is preliminary
                         // Only has a "stop" mode, in the future there should be a "resend the borked message" mode
-                        int socket_num = response_buffer[1] & 0x0F;
                         int error_type = response_buffer[2];
 
                         lock (command_buffer)
@@ -1723,7 +1735,7 @@ namespace visca
                                 failed_command = dispatched_cmd;
                                 dispatched_cmd = null;
 
-                                Trace.WriteLine(DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " Received message length error: " + failed_command.ToString());
+                                Trace.WriteLine(DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " Command error (message length error): " + failed_command.ToString());
                                 if (command_error != null) command_error(this, EventArgs.Empty);  // Inform the "user" that an error happened
                             }
                             else if (error_type == 0x02)  // Message syntax error
@@ -1731,7 +1743,7 @@ namespace visca
                                 failed_command = dispatched_cmd;
                                 dispatched_cmd = null;
 
-                                Trace.WriteLine(DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " Received message syntax error: " + failed_command.ToString());
+                                Trace.WriteLine(DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " Command error (message syntax error): " + failed_command.ToString());
                                 if (command_error != null) command_error(this, EventArgs.Empty);  // Inform the "user" that an error happened
                             }
                             else if (error_type == 0x03)  // Command buffer full
@@ -1739,7 +1751,7 @@ namespace visca
                                 failed_command = dispatched_cmd;
                                 dispatched_cmd = null;
 
-                                Trace.WriteLine(DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " Received command buffer full error: " + failed_command.ToString());
+                                Trace.WriteLine(DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " Command error (command buffer full error): " + failed_command.ToString());
                                 if (command_error != null) command_error(this, EventArgs.Empty);  // Inform the "user" that an error happened
                             }
                             else if (error_type == 0x04)  // Command cancelled.  This only can happen for cancelling an absolute movement
@@ -1779,17 +1791,16 @@ namespace visca
                                 socket_available.Set();  // There is now a socket available, inform the command dispatch thread that a socket is available
                                 serial_channel_open.Set();  // Inform the command dispatch thread that serial communcation is available
                             }
-                            else if (error_type == 0x05)  // No socket (to be cancelled).  This could happen if as a cancel was being dispatched, an absolute movement completed
+                            else if (error_type == 0x05)  // No socket (to be cancelled) error.  This could happen if as a cancel was being dispatched, an absolute movement completed
                             {
-                                Trace.WriteLine(DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " Received no socket error: " + dispatched_cmd.ToString());
+                                Trace.WriteLine(DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " Command error (no socket error): " + dispatched_cmd.ToString());
+                                // Note: we don't inform the user of an error because it isn't an "error"
                                 dispatched_cmd = null;
                                 socket_available.Set();  // Inform the command dispatch thread that a socket is available
                                 serial_channel_open.Set();  // Inform the command dispatch thread that serial communcation is available
                             }
                             else if (error_type == 0x41)  // Command is not executable
                             {
-                                Trace.WriteLine(DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " Received command not executable error: " + dispatched_cmd.ToString());
-
                                 if (dispatched_cmd is pan_tilt_absolute_command && last_successful_pan_tilt_cmd is pan_tilt_stop_jog_command)
                                 {
                                     // Here we re-insert the command if its an absolute command following a stop-jog command.  This is because the camera is not done "stopping" when it says it is.  Therefore we re-insert this command in this special case.
@@ -1801,7 +1812,7 @@ namespace visca
 
                                     if (!any_found)
                                     {
-                                        Trace.WriteLine(DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " Retrying command: " + dispatched_cmd.ToString());
+                                        Trace.WriteLine(DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " Rebuffering command: " + dispatched_cmd.ToString());
                                         command_buffer.Insert(0, dispatched_cmd);
                                     }
 
@@ -1819,7 +1830,7 @@ namespace visca
 
                                     if (!any_found)
                                     {
-                                        Trace.WriteLine(DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " Retrying command: " + dispatched_cmd.ToString());
+                                        Trace.WriteLine(DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " Rebuffering command: " + dispatched_cmd.ToString());
                                         command_buffer.Insert(0, dispatched_cmd);
                                     }
 
@@ -1831,7 +1842,7 @@ namespace visca
                                     failed_command = dispatched_cmd;
                                     dispatched_cmd = null;
 
-                                    Trace.WriteLine(DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " Command not executable: " + failed_command.ToString());
+                                    Trace.WriteLine(DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " Command error (command not executable error): " + failed_command.ToString());
                                     if (command_error != null) command_error(this, EventArgs.Empty);  // Inform the "user" that an error happened
                                 }
                             }
@@ -1840,8 +1851,8 @@ namespace visca
                 }
                 catch (InvalidOperationException)  // Serial port wasn't open
                 {
+                    Trace.WriteLine(DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " Serial port error (port not open)");
                     if (serial_port_error != null) serial_port_error(this, EventArgs.Empty);
-                    Trace.WriteLine(DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " Serial port error: Port not open");
                 }
             }
 
