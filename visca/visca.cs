@@ -401,9 +401,9 @@ namespace visca
         }
 
         // Serial connection
-        private SerialPort port { get; set; }
-        private int camera_num { get; set; }
-        public bool hardware_connected { get; private set; }
+        private SerialPort port { get; set; } = new SerialPort();
+        private int camera_num;
+        public bool hardware_connected { get; private set; } = false;
 
         // Camera commands
         private class command
@@ -1456,18 +1456,403 @@ namespace visca
         }
 
         // Camera status
-        private DRIVE_STATUS pan_tilt_status { get; set; }
-        private DRIVE_STATUS zoom_status { get; set; }
-        public angular_position pan { get; private set; }
-        public angular_position tilt { get; private set; }
-        public zoom_position zoom { get; private set; }
+        private DRIVE_STATUS pan_tilt_status { get; set; } = DRIVE_STATUS.FULL_STOP;
+        private DRIVE_STATUS zoom_status { get; set; } = DRIVE_STATUS.FULL_STOP;
+        public angular_position pan { get; private set; } = new angular_position();
+        public angular_position tilt { get; private set; } = new angular_position();
+        public zoom_position zoom { get; private set; } = new zoom_position();
+
+        // Command buffer
+        private ObservableCollection<command> command_buffer { get; set; } = new ObservableCollection<command>();
+        private command failed_command { get; set; } = null;
+        private command last_successful_pan_tilt_cmd { get; set; } = null;
+        private command last_successful_zoom_cmd { get; set; } = null;
+        private command dispatched_cmd { get; set; } = null;
+        private command socket_one_cmd { get; set; } = null;
+        private command socket_two_cmd { get; set; } = null;
+
+        // Error handlers
+        public delegate void CameraHardwareErrorEventHandler(object sender, EventArgs e);
+        public event CameraHardwareErrorEventHandler position_data_error;  // Message triggered when position data from the camera is corrupt or unexpected
+        public event CameraHardwareErrorEventHandler serial_port_error;  // Message triggered when serial port fails
+        public event CameraHardwareErrorEventHandler command_error;  // Message triggered when a command fails
+        public delegate void JogOutOfRangeEventHandler(object sender, EventArgs e);
+        public event JogOutOfRangeEventHandler pan_tilt_jog_limit_error;  // Message triggered when the pan/tilt drive reaches its limit
+        public event JogOutOfRangeEventHandler zoom_jog_limit_error;  // Message triggered when the zoom drive reaches its limit
+
+        // Thread control, used to tell threads to stop
+        private CancellationTokenSource thread_control { get; set; } = new CancellationTokenSource();
+
+        // Receive thread
+        private int get_response(out List<int> response_buffer, bool use_timeout = true)
+        {
+            int old_timeout_value = port.ReadTimeout;
+            if (use_timeout == false)
+                port.ReadTimeout = SerialPort.InfiniteTimeout;
+
+            List<int> temp = new List<int>();
+            while (true)
+            {
+                try { temp.Add(port.ReadByte()); }
+                catch (TimeoutException)
+                {
+                    port.ReadTimeout = old_timeout_value;
+                    response_buffer = new List<int>();
+                    return VISCA_CODE.RESPONSE_TIMEOUT;
+                }
+                if (temp[temp.Count - 1] == VISCA_CODE.TERMINATOR)  // Found the terminator
+                    break;
+            }
+            port.ReadTimeout = old_timeout_value;
+            response_buffer = temp;
+            if (response_buffer.Count >= 3)  // Got the correct amount of bytes from the camera
+                return response_buffer[1] & 0xF0;
+            else
+                return VISCA_CODE.RESPONSE_ERROR;
+        }
+        private void receive_DoWork()
+        {
+            while (!thread_control.IsCancellationRequested)
+            {
+                List<int> response_buffer = new List<int>();
+
+                try
+                {
+                    int response = get_response(out response_buffer);  // Get response from camera
+
+                    if (response == VISCA_CODE.RESPONSE_TIMEOUT)  // A timeout on the serial port occured, this lets us loop back up and check if threads have been cancelled (using "thread_control") while waiting for a message
+                        continue;
+
+                    int socket_num = response_buffer[1] & 0x0F;
+                    if (response == VISCA_CODE.RESPONSE_ACK)  // A command has been acknowledged
+                    {
+                        // Set the status of the camera drives
+                        if (dispatched_cmd is pan_tilt_absolute_command)
+                            pan_tilt_status = DRIVE_STATUS.ABSOLUTE;
+                        else if (dispatched_cmd is pan_tilt_cancel_command)
+                            pan_tilt_status = DRIVE_STATUS.STOP_ABSOLUTE;
+                        else if (dispatched_cmd is pan_tilt_jog_command)
+                            pan_tilt_status = DRIVE_STATUS.JOG;
+                        else if (dispatched_cmd is pan_tilt_stop_jog_command)
+                            pan_tilt_status = DRIVE_STATUS.STOP_JOG;
+                        else if (dispatched_cmd is zoom_absolute_command)
+                            zoom_status = DRIVE_STATUS.ABSOLUTE;
+                        else if (dispatched_cmd is zoom_cancel_command)
+                            zoom_status = DRIVE_STATUS.STOP_ABSOLUTE;
+                        else if (dispatched_cmd is zoom_jog_command)
+                            zoom_status = DRIVE_STATUS.JOG;
+                        else if (dispatched_cmd is zoom_stop_jog_command)
+                            zoom_status = DRIVE_STATUS.STOP_JOG;
+
+                        if (socket_num == 1)  // The command is in socket one
+                            socket_one_cmd = dispatched_cmd;
+                        else  // The command is in socket two
+                            socket_two_cmd = dispatched_cmd;
+                        Trace.WriteLine(DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " Command acknowledged: " + dispatched_cmd.ToString());
+                        dispatched_cmd = null;  // Empty the dispatched command
+
+                        // If there are two sockets being used, no more commands can happen
+                        if (socket_one_cmd != null && socket_two_cmd != null)  // Both sockets have something in them
+                            socket_available.Reset();
+
+                        serial_channel_open.Set();  // Inform the command dispatch thread that serial communcation is available
+                    }
+                    else if (response == VISCA_CODE.RESPONSE_COMPLETED)  // A command has been completed
+                    {
+                        if (socket_num == 0)  // Special command completed
+                        {
+                            if (response_buffer.Count == 11)  // Inquiry - pan/tilt position
+                            {
+                                int pan_range = maximum_pan_angle.encoder_count - minimum_pan_angle.encoder_count;
+                                int tilt_range = maximum_tilt_angle.encoder_count - minimum_tilt_angle.encoder_count;
+                                short temp_pan_enc = (short)((response_buffer[2] << 12) | (response_buffer[3] << 8) | (response_buffer[4] << 4) | (response_buffer[5]));
+                                short temp_tilt_enc = (short)((response_buffer[6] << 12) | (response_buffer[7] << 8) | (response_buffer[8] << 4) | (response_buffer[9]));
+
+                                if (temp_pan_enc > hardware_maximum_pan_angle.encoder_count + pan_range * 0.05 ||  // Response outside of operating range (allowing for 5% over limits indicated in the manual)
+                                    temp_pan_enc < hardware_minimum_pan_angle.encoder_count - pan_range * 0.05 ||
+                                    temp_tilt_enc > hardware_maximum_tilt_angle.encoder_count + tilt_range * 0.05 ||
+                                    temp_tilt_enc < hardware_minimum_tilt_angle.encoder_count - tilt_range * 0.05)
+                                {
+                                    Trace.WriteLine(DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " Received invalid angles: " + dispatched_cmd.ToString());
+                                    failed_command = dispatched_cmd;
+                                    dispatched_cmd = null;
+                                    if (position_data_error != null) position_data_error(this, EventArgs.Empty);  // Inform the "user" that an error happened
+                                }
+                                else  // Data is good
+                                {
+                                    Trace.WriteLine(DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " Command complete: " + dispatched_cmd.ToString());
+                                    dispatched_cmd = null;  // The inquiry command is in the dispatched_cmd variable (not in a socket)
+                                    pan.encoder_count = temp_pan_enc;
+                                    tilt.encoder_count = temp_tilt_enc;
+
+                                    serial_channel_open.Set();  // Signal the dispatch thread that its ok to start
+                                    pan_tilt_inquiry_complete.Set();  // Signal the after stop thread that its ok to use data now
+
+                                    // Are we past the limit?
+                                    if (pan.encoder_count > maximum_pan_angle.encoder_count || pan.encoder_count < minimum_pan_angle.encoder_count ||
+                                        tilt.encoder_count > maximum_tilt_angle.encoder_count || tilt.encoder_count < minimum_tilt_angle.encoder_count)
+                                        if (pan_tilt_jog_limit_error != null) pan_tilt_jog_limit_error(this, EventArgs.Empty);  // Inform the "user" that we hit a limit
+                                }
+                            }
+                            else if (response_buffer.Count == 7)  // Inquiry - zoom pos
+                            {
+                                int zoom_range = maximum_zoom_ratio.encoder_count - minimum_zoom_ratio.encoder_count;
+                                short temp_zoom_enc = (short)((response_buffer[2] << 12) | (response_buffer[3] << 8) | (response_buffer[4] << 4) | (response_buffer[5]));
+
+                                if (temp_zoom_enc > hardware_maximum_zoom_ratio.encoder_count + zoom_range * 0.05 ||  // Response outside of operating range (allowing for 5% over limits indicated in the manual)
+                                    temp_zoom_enc < hardware_minimum_zoom_ratio.encoder_count - zoom_range * 0.05)
+                                {
+                                    Trace.WriteLine(DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " Received invalid ratio: " + dispatched_cmd.ToString());
+                                    failed_command = dispatched_cmd;
+                                    dispatched_cmd = null;
+                                    if (position_data_error != null) position_data_error(this, EventArgs.Empty);  // Inform the "user" that an error happened
+                                }
+                                else  // Data is good
+                                {
+                                    Trace.WriteLine(DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " Command complete: " + dispatched_cmd.ToString());
+                                    dispatched_cmd = null;  // The inquiry command is in the dispatched_cmd variable (not in a socket)
+                                    zoom.encoder_count = temp_zoom_enc;
+
+                                    serial_channel_open.Set();  // Signal the dispatch thread that its ok to start
+                                    zoom_inquiry_complete.Set();  // Signal the after stop thread that its ok to use data now
+
+                                    // Are we past the limit?
+                                    if (zoom.encoder_count > maximum_zoom_ratio.encoder_count || zoom.encoder_count < minimum_zoom_ratio.encoder_count)
+                                        if (zoom_jog_limit_error != null) zoom_jog_limit_error(this, EventArgs.Empty);  // Inform the "user" that we hit a limit
+                                }
+                            }
+                            else if (response_buffer.Count == 3)  // Emergency stop complete
+                            {
+                                Trace.WriteLine(DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " Command complete: " + dispatched_cmd.ToString());
+
+                                pan_tilt_status = DRIVE_STATUS.FULL_STOP;
+                                zoom_status = DRIVE_STATUS.FULL_STOP;
+                                socket_one_cmd = null;  // Reset the socket commands
+                                socket_two_cmd = null;  // Reset the socket commands
+                                dispatched_cmd = null;  // Reset the dispatched command
+                                last_successful_pan_tilt_cmd = null;  // Reset the last successful commands
+                                last_successful_zoom_cmd = null;      // Reset the last successful commands
+                                command_buffer.Clear();
+
+                                emergency_stop_turnstyle.Set();  // Inform the GUI level function that stop has completed
+                                socket_available.Set();  // Inform the command dispatch thread that a socket is available
+                                serial_channel_open.Set();  // Signal the dispatch thread that its ok to start
+
+                                pan_tilt_inquiry_after_stop = true;  // Doing both inquiries here because we don't know which drives stopped moving
+                                zoom_inquiry_after_stop = true;      // Also it doesn't hurt to do an extra inquiry
+                                after_stop.Set();  // Continue doing inquiries until the drive has stopped moving
+                            }
+                        }
+                        else  // A command has been completed
+                        {
+                            command temp;
+                            if (socket_num == 1)  // The command was in socket one
+                                temp = socket_one_cmd;
+                            else if (socket_num == 2)  // The command was in socket two
+                                temp = socket_two_cmd;
+                            else  // The socket number is invalid
+                            {
+                                if (command_error != null) command_error(this, EventArgs.Empty);  // Inform the "user" that there was an error
+                                return;
+                            }
+
+                            if (temp is pan_tilt_absolute_command || temp is pan_tilt_jog_command || temp is pan_tilt_stop_jog_command)  // The command is a pan/tilt command.  Note that a stop absolute does not show up here, but as an "error"
+                            {
+                                last_successful_pan_tilt_cmd = temp;
+
+                                if (temp is pan_tilt_absolute_command)  // An absolute movement completed
+                                {
+                                    pan_tilt_status = DRIVE_STATUS.FULL_STOP;
+
+                                    pan_tilt_inquiry_after_stop = true;
+                                    after_stop.Set();  // Continue doing inquiries until the drive has stopped moving
+                                }
+                                else if (temp is pan_tilt_jog_command)  // The drive is now jogging
+                                    pan_tilt_status = DRIVE_STATUS.JOG;  // Note that this should already be set to jog at this point (from the acknowledgement), doing it here for clarity
+                                else if (temp is pan_tilt_stop_jog_command)  // The drive has stopped completely from a stop jog command.  Note that it is not actually fully stopped, so an absolute command at this point is not possible.  There is code to "fix" this bug in error section below.
+                                {
+                                    pan_tilt_status = DRIVE_STATUS.FULL_STOP;
+
+                                    pan_tilt_inquiry_after_stop = true;
+                                    after_stop.Set();  // Continue doing inquiries until the drive has stopped moving
+                                }
+                            }
+                            else if (temp is zoom_absolute_command || temp is zoom_jog_command || temp is zoom_stop_jog_command)  // The command is a zoom command.  Note that a stop absolute does not show up here, but as an "error"
+                            {
+                                last_successful_zoom_cmd = temp;
+
+                                if (temp is zoom_absolute_command)  // An absolute movement completed
+                                {
+                                    zoom_status = DRIVE_STATUS.FULL_STOP;
+
+                                    zoom_inquiry_after_stop = true;
+                                    after_stop.Set();  // Continue doing inquiries until the drive has stopped moving
+                                }
+                                else if (temp is zoom_jog_command)  // The drive is now jogging
+                                    zoom_status = DRIVE_STATUS.JOG;  // Note that this should already be set to jog at this point (from the acknowledgement, doing it here for clarity
+                                else if (temp is zoom_stop_jog_command)  // The drive has stopped completely from a stop jog command.  Note that it is not actually fully stopped, so an absolute command at this point is not possible.  There is code to "fix" this bug in the error section.
+                                {
+                                    zoom_status = DRIVE_STATUS.FULL_STOP;
+
+                                    zoom_inquiry_after_stop = true;
+                                    after_stop.Set();  // Continue doing inquiries until the drive has stopped moving
+                                }
+                            }
+
+                            Trace.WriteLine(DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " Command complete: " + temp.ToString());
+
+                            // Empty the socket the command was in
+                            if (socket_num == 1)  // The command was in socket one
+                                socket_one_cmd = null;
+                            else  // The command was in socket two
+                                socket_two_cmd = null;
+                            socket_available.Set();  // There is now a socket available, inform the command dispatch thread that a socket is available
+                        }
+                    }
+                    else if (response == VISCA_CODE.RESPONSE_ERROR)  // There was an error
+                    {
+                        // This code is preliminary
+                        // Only has a "stop" mode, in the future there should be a "resend the borked message" mode
+                        int socket_num = response_buffer[1] & 0x0F;
+                        int error_type = response_buffer[2];
+
+                        lock (command_buffer)
+                        {
+                            if (error_type == 0x01)  // Message length error
+                            {
+                                failed_command = dispatched_cmd;
+                                dispatched_cmd = null;
+
+                                Trace.WriteLine(DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " Received message length error: " + failed_command.ToString());
+                                if (command_error != null) command_error(this, EventArgs.Empty);  // Inform the "user" that an error happened
+                            }
+                            else if (error_type == 0x02)  // Message syntax error
+                            {
+                                failed_command = dispatched_cmd;
+                                dispatched_cmd = null;
+
+                                Trace.WriteLine(DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " Received message syntax error: " + failed_command.ToString());
+                                if (command_error != null) command_error(this, EventArgs.Empty);  // Inform the "user" that an error happened
+                            }
+                            else if (error_type == 0x03)  // Command buffer full
+                            {
+                                failed_command = dispatched_cmd;
+                                dispatched_cmd = null;
+
+                                Trace.WriteLine(DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " Received command buffer full error: " + failed_command.ToString());
+                                if (command_error != null) command_error(this, EventArgs.Empty);  // Inform the "user" that an error happened
+                            }
+                            else if (error_type == 0x04)  // Command cancelled.  This only can happen for cancelling an absolute movement
+                            {
+                                command temp;
+                                if (socket_num == 1)  // The cancelled command was in socket one
+                                    temp = socket_one_cmd;
+                                else  // The cancelled command was in socket two
+                                    temp = socket_two_cmd;
+
+                                if (temp is pan_tilt_absolute_command)
+                                {
+                                    last_successful_pan_tilt_cmd = dispatched_cmd;  // The dispatched command was the cancel
+                                    pan_tilt_status = DRIVE_STATUS.FULL_STOP;
+
+                                    pan_tilt_inquiry_after_stop = true;
+                                    after_stop.Set();  // Continue doing inquiries until the drive has stopped moving
+                                }
+                                else if (temp is zoom_absolute_command)
+                                {
+                                    last_successful_zoom_cmd = dispatched_cmd;  // The dispatched command was the cancel
+                                    zoom_status = DRIVE_STATUS.FULL_STOP;
+
+                                    zoom_inquiry_after_stop = true;
+                                    after_stop.Set();  // Continue doing inquiries until the drive has stopped moving
+                                }
+
+                                Trace.WriteLine(DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " Command complete: " + dispatched_cmd.ToString());
+
+                                // Empty the socket the command was in
+                                if (socket_num == 1)  // The command was in socket one
+                                    socket_one_cmd = null;
+                                else  // The command was in socket two
+                                    socket_two_cmd = null;
+                                dispatched_cmd = null;  // The cancel command is now done
+
+                                socket_available.Set();  // There is now a socket available, inform the command dispatch thread that a socket is available
+                                serial_channel_open.Set();  // Inform the command dispatch thread that serial communcation is available
+                            }
+                            else if (error_type == 0x05)  // No socket (to be cancelled).  This could happen if as a cancel was being dispatched, an absolute movement completed
+                            {
+                                Trace.WriteLine(DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " Received no socket error: " + dispatched_cmd.ToString());
+                                dispatched_cmd = null;
+                                socket_available.Set();  // Inform the command dispatch thread that a socket is available
+                                serial_channel_open.Set();  // Inform the command dispatch thread that serial communcation is available
+                            }
+                            else if (error_type == 0x41)  // Command is not executable
+                            {
+                                Trace.WriteLine(DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " Received command not executable error: " + dispatched_cmd.ToString());
+
+                                if (dispatched_cmd is pan_tilt_absolute_command && last_successful_pan_tilt_cmd is pan_tilt_stop_jog_command)
+                                {
+                                    // Here we re-insert the command if its an absolute command following a stop-jog command.  This is because the camera is not done "stopping" when it says it is.  Therefore we re-insert this command in this special case.
+                                    bool any_found = false;
+                                    for (int i = 0; i < command_buffer.Count; ++i)
+                                        if (command_buffer[i] is pan_tilt_absolute_command || command_buffer[i] is pan_tilt_cancel_command ||
+                                            command_buffer[i] is pan_tilt_jog_command || command_buffer[i] is pan_tilt_stop_jog_command)  // There's already a pan/tilt command that is awaiting dispatch
+                                            any_found = true;
+
+                                    if (!any_found)
+                                    {
+                                        Trace.WriteLine(DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " Retrying command: " + dispatched_cmd.ToString());
+                                        command_buffer.Insert(0, dispatched_cmd);
+                                    }
+
+                                    dispatched_cmd = null;
+                                    serial_channel_open.Set();  // Signal the dispatch thread that the serial channel is open
+                                }
+                                else if (dispatched_cmd is zoom_absolute_command && last_successful_zoom_cmd is zoom_stop_jog_command)
+                                {
+                                    // Here we re-insert the command if its an absolute command following a stop-jog command.  This is because the camera is not done "stopping" when it says it is.  Therefore we re-insert this command in this special case.
+                                    bool any_found = false;
+                                    for (int i = 0; i < command_buffer.Count; ++i)
+                                        if (command_buffer[i] is zoom_absolute_command || command_buffer[i] is zoom_cancel_command ||
+                                            command_buffer[i] is zoom_jog_command || command_buffer[i] is zoom_stop_jog_command)  // There's already a zoom command that is awaiting dispatch
+                                            any_found = true;
+
+                                    if (!any_found)
+                                    {
+                                        Trace.WriteLine(DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " Retrying command: " + dispatched_cmd.ToString());
+                                        command_buffer.Insert(0, dispatched_cmd);
+                                    }
+
+                                    dispatched_cmd = null;
+                                    serial_channel_open.Set();  // Signal the dispatch thread that the serial channel is open
+                                }
+                                else
+                                {
+                                    failed_command = dispatched_cmd;
+                                    dispatched_cmd = null;
+
+                                    Trace.WriteLine(DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " Command not executable: " + failed_command.ToString());
+                                    if (command_error != null) command_error(this, EventArgs.Empty);  // Inform the "user" that an error happened
+                                }
+                            }
+                        }
+                    }
+                }
+                catch (InvalidOperationException)  // Serial port wasn't open
+                {
+                    if (serial_port_error != null) serial_port_error(this, EventArgs.Empty);
+                    Trace.WriteLine(DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " Serial port error: Port not open");
+                }
+            }
+
+            Trace.WriteLine(DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " Receive thread terminated");  // Thread terminated
+        }
+        private Thread receive_thread { get; set; }
+
+        // Dispatch thread
 
         public visca_camera()
         {
-            // Create serial port
-            port = new SerialPort();
-            hardware_connected = false;
-
             // Default maximum and minimum angles/ratios
             _maximum_pan_angle = hardware_maximum_pan_angle;
             _minimum_pan_angle = hardware_minimum_pan_angle;
@@ -1476,12 +1861,8 @@ namespace visca
             _maximum_zoom_ratio = hardware_maximum_zoom_ratio;
             _minimum_zoom_ratio = hardware_minimum_zoom_ratio;
 
-            // Create variables for drive status
-            pan_tilt_status = DRIVE_STATUS.FULL_STOP;
-            zoom_status = DRIVE_STATUS.FULL_STOP;
-            pan = new angular_position();
-            tilt = new angular_position();
-            zoom = new zoom_position();
+            // Threads
+            receive_thread = new Thread(new ThreadStart(receive_DoWork));
         }
         public override bool Equals(object obj)
         {
@@ -1517,7 +1898,6 @@ namespace visca
             else
                 return false;
         }
-
     }
 
     public class EVI_D70 : visca_camera
@@ -1563,6 +1943,10 @@ namespace visca
         public override zoom_position hardware_minimum_zoom_ratio
         {
             get { return zoom_position.create_from_encoder_count(zoom_position.zoom_values[0].Item2); }
+        }
+
+        public EVI_D70() : base()
+        {
         }
 
         /*
