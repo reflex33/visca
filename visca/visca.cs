@@ -416,6 +416,233 @@ namespace visca
         protected TraceSource log;
         protected TraceSource position_log;
 
+        // User commands
+        public bool moving_pan_tilt  // Checks if there are any pan/tilt commands in the buffer, or if the drive is moving
+        {
+            get
+            {
+                lock (command_buffer)
+                {
+                    bool any_found = false;
+                    if (pan_tilt_status != DRIVE_STATUS.FULL_STOP)  // The drive is moving
+                        any_found = true;
+                    for (int i = 0; i < command_buffer.Count; ++i)
+                        if (command_buffer[i] is pan_tilt_jog_command || command_buffer[i] is pan_tilt_absolute_command)  // There is some command awaiting dispatch
+                            any_found = true;
+
+                    return any_found;
+                }
+            }
+        }
+        public bool moving_zoom  // Checks if there are any zoom commands in the buffer, or if the drive is moving
+        {
+            get
+            {
+                lock (command_buffer)
+                {
+                    bool any_found = false;
+                    if (zoom_status != DRIVE_STATUS.FULL_STOP)  // The drive is moving
+                        any_found = true;
+                    for (int i = 0; i < command_buffer.Count; ++i)
+                        if (command_buffer[i] is zoom_jog_command || command_buffer[i] is zoom_absolute_command)  // There is some command awaiting dispatch
+                            any_found = true;
+
+                    return any_found;
+                }
+            }
+        }
+        public void emergency_stop()  // Note: this commands blocks until the stop is complete
+        {
+            if (!hardware_connected)  // No motion commands allowed now, note that in this case the camera should already be stopped
+                return;
+
+            lock (command_buffer)
+            {
+                command_buffer.Clear();  // Remove all pending commands
+                emergency_stop_turnstyle.Reset();
+                command temp = new IF_CLEAR_command(camera_num, this);
+                command_buffer.Add(temp);  // Add in the emergency stop command
+                command_buffer_populated.Set();  // Tell the dispatch thread that there is now something in the command buffer
+
+                // Trace command buffer
+                lock (log)
+                {
+                    int line_count = 1;
+                    log.TraceEvent(TraceEventType.Information, line_count++, DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " Command added to buffer: " + temp.ToString());
+                    log.TraceEvent(TraceEventType.Information, line_count++, "-----------------------");
+                    trace_command_buffer(ref line_count);
+                }
+            }
+
+            emergency_stop_turnstyle.Wait(thread_control.Token);  // Wait for the command to complete
+        }
+        public void stop_pan_tilt()
+        {
+            if (!hardware_connected)  // No motion commands allowed now
+                return;
+
+            lock (command_buffer)
+            {
+                // Eliminate any pan/tilt command from the buffer
+                for (int i = 0; i < command_buffer.Count; ++i)
+                    if (command_buffer[i] is pan_tilt_absolute_command || command_buffer[i] is pan_tilt_cancel_command ||
+                        command_buffer[i] is pan_tilt_jog_command || command_buffer[i] is pan_tilt_stop_jog_command)  // There's already a pan/tilt command that is awaiting dispatch
+                        command_buffer.RemoveAt(i);
+
+                command temp = new pan_tilt_stop_jog_command(camera_num, this);
+                command_buffer.Add(temp);  // Add it to the end of the buffer
+                command_buffer_populated.Set();  // Tell the dispatch thread that there is now something in the command buffer
+
+                // Trace command buffer
+                lock (log)
+                {
+                    int line_count = 1;
+                    log.TraceEvent(TraceEventType.Information, line_count++, DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " Command added to buffer: " + temp.ToString());
+                    log.TraceEvent(TraceEventType.Information, line_count++, "-----------------------");
+                    trace_command_buffer(ref line_count);
+                }
+            }
+        }
+        public void jog_pan_tilt_radians(int speed, double direction_rad)
+        {
+            jog_pan_tilt_degrees(speed, direction_rad * (180.0 / Math.PI));
+        }
+        public void jog_pan_tilt_degrees(int speed, double direction_deg)
+        {
+            if (!hardware_connected)  // No motion commands allowed now
+                return;
+
+            lock (command_buffer)
+            {
+                // Eliminate any pan/tilt command from the buffer
+                for (int i = 0; i < command_buffer.Count; ++i)
+                    if (command_buffer[i] is pan_tilt_absolute_command || command_buffer[i] is pan_tilt_cancel_command ||
+                        command_buffer[i] is pan_tilt_jog_command || command_buffer[i] is pan_tilt_stop_jog_command)  // There's already a pan/tilt command that is awaiting dispatch
+                        command_buffer.RemoveAt(i);
+
+                command temp = new pan_tilt_jog_command(camera_num, this, speed, direction_deg);
+                command_buffer.Add(temp);  // Add it to the end of the buffer
+                command_buffer_populated.Set();  // Tell the dispatch thread that there is now something in the command buffer
+
+                // Trace command buffer
+                lock (log)
+                {
+                    int line_count = 1;
+                    log.TraceEvent(TraceEventType.Information, line_count++, DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " Command added to buffer: " + temp.ToString());
+                    log.TraceEvent(TraceEventType.Information, line_count++, "-----------------------");
+                    trace_command_buffer(ref line_count);
+                }
+            }
+        }
+        public void absolute_pan_tilt(int speed, angular_position pan_angle, angular_position tilt_angle)
+        {
+            if (!hardware_connected)  // No motion commands allowed now
+                return;
+
+            lock (command_buffer)
+            {
+                // Eliminate any pan/tilt command from the buffer
+                for (int i = 0; i < command_buffer.Count; ++i)
+                    if (command_buffer[i] is pan_tilt_absolute_command || command_buffer[i] is pan_tilt_cancel_command ||
+                        command_buffer[i] is pan_tilt_jog_command || command_buffer[i] is pan_tilt_stop_jog_command)  // There's already a pan/tilt command that is awaiting dispatch
+                        command_buffer.RemoveAt(i);
+
+                command temp = new pan_tilt_absolute_command(camera_num, this, speed, pan_angle, tilt_angle);
+                command_buffer.Add(temp);  // Add it to the end of the buffer
+                command_buffer_populated.Set();  // Tell the dispatch thread that there is now something in the command buffer
+
+                // Trace command buffer
+                lock (log)
+                {
+                    int line_count = 1;
+                    log.TraceEvent(TraceEventType.Information, line_count++, DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " Command added to buffer: " + temp.ToString());
+                    log.TraceEvent(TraceEventType.Information, line_count++, "-----------------------");
+                    trace_command_buffer(ref line_count);
+                }
+            }
+        }
+        public void stop_zoom()
+        {
+            if (!hardware_connected)  // No motion commands allowed now
+                return;
+
+            lock (command_buffer)
+            {
+                // Eliminate any zoom command from the buffer
+                for (int i = 0; i < command_buffer.Count; ++i)
+                    if (command_buffer[i] is zoom_absolute_command || command_buffer[i] is zoom_cancel_command ||
+                        command_buffer[i] is zoom_jog_command || command_buffer[i] is zoom_stop_jog_command)  // There's already a zoom command that is awaiting dispatch
+                        command_buffer.RemoveAt(i);
+
+                command temp = new zoom_stop_jog_command(camera_num, this);
+                command_buffer.Add(temp);  // Add it to the end of the buffer
+                command_buffer_populated.Set();  // Tell the dispatch thread that there is now something in the command buffer
+
+                // Trace command buffer
+                lock (log)
+                {
+                    int line_count = 1;
+                    log.TraceEvent(TraceEventType.Information, line_count++, DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " Command added to buffer: " + temp.ToString());
+                    log.TraceEvent(TraceEventType.Information, line_count++, "-----------------------");
+                    trace_command_buffer(ref line_count);
+                }
+            }
+        }
+        public void jog_zoom(int speed, ZOOM_DIRECTION direction)
+        {
+            if (!hardware_connected)  // No motion commands allowed now
+                return;
+
+            lock (command_buffer)
+            {
+                // Eliminate any zoom command from the buffer
+                for (int i = 0; i < command_buffer.Count; ++i)
+                    if (command_buffer[i] is zoom_absolute_command || command_buffer[i] is zoom_cancel_command ||
+                        command_buffer[i] is zoom_jog_command || command_buffer[i] is zoom_stop_jog_command)  // There's already a zoom command that is awaiting dispatch
+                        command_buffer.RemoveAt(i);
+
+                command temp = new zoom_jog_command(camera_num, this, speed, direction);
+                command_buffer.Add(temp);  // Add it to the end of the buffer
+                command_buffer_populated.Set();  // Tell the dispatch thread that there is now something in the command buffer
+
+                // Trace command buffer
+                lock (log)
+                {
+                    int line_count = 1;
+                    log.TraceEvent(TraceEventType.Information, line_count++, DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " Command added to buffer: " + temp.ToString());
+                    log.TraceEvent(TraceEventType.Information, line_count++, "-----------------------");
+                    trace_command_buffer(ref line_count);
+                }
+            }
+        }
+        public void absolute_zoom(zoom_position zoom_ratio)
+        {
+            if (!hardware_connected)  // No motion commands allowed now
+                return;
+
+            lock (command_buffer)
+            {
+                // Eliminate any zoom command from the buffer
+                for (int i = 0; i < command_buffer.Count; ++i)
+                    if (command_buffer[i] is zoom_absolute_command || command_buffer[i] is zoom_cancel_command ||
+                        command_buffer[i] is zoom_jog_command || command_buffer[i] is zoom_stop_jog_command)  // There's already a zoom command that is awaiting dispatch
+                        command_buffer.RemoveAt(i);
+
+                command temp = new zoom_absolute_command(camera_num, this, zoom_ratio);
+                command_buffer.Add(temp);  // Add it to the end of the buffer
+                command_buffer_populated.Set();  // Tell the dispatch thread that there is now something in the command buffer
+
+                // Trace command buffer
+                lock (log)
+                {
+                    int line_count = 1;
+                    log.TraceEvent(TraceEventType.Information, line_count++, DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " Command added to buffer: " + temp.ToString());
+                    log.TraceEvent(TraceEventType.Information, line_count++, "-----------------------");
+                    trace_command_buffer(ref line_count);
+                }
+            }
+        }
+
         // Camera commands
         private class command
         {
@@ -1696,7 +1923,7 @@ namespace visca
         public event CameraHardwareErrorEventHandler command_error;  // Message triggered when a command fails
         public delegate void JogOutOfRangeEventHandler(object sender, EventArgs e);
         public event JogOutOfRangeEventHandler pan_tilt_jog_limit_error;  // Message triggered when the pan/tilt drive reaches its limit
-        public event JogOutOfRangeEventHandler zoom_jog_limit_error;  // Message triggered when the zoom drive reaches its limit 
+        public event JogOutOfRangeEventHandler zoom_jog_limit_error;  // Message triggered when the zoom drive reaches its limit
 
         // Receive thread
         private int get_response(out List<int> response_buffer, bool use_timeout = true)
