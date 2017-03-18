@@ -405,11 +405,16 @@ namespace visca
         private int camera_num;
         public bool hardware_connected { get; private set; } = false;
 
-        // Code control turnstyles
+        // Code control
         private ManualResetEventSlim serial_channel_open { get; set; } = new ManualResetEventSlim(true);
         private ManualResetEventSlim socket_available { get; set; } = new ManualResetEventSlim(true);
         private ManualResetEventSlim command_buffer_populated { get; set; } = new ManualResetEventSlim(false);  // This event is used to indicate that something is in the command buffer
         private ManualResetEventSlim emergency_stop_turnstyle { get; set; } = new ManualResetEventSlim(false);
+        private CancellationTokenSource thread_control { get; set; } = new CancellationTokenSource();  // Thread control, used to tell threads to stop
+
+        // Tracers
+        protected TraceSource log;
+        protected TraceSource position_log;
 
         // Camera commands
         private class command
@@ -484,7 +489,7 @@ namespace visca
             }
             public virtual string ToStringDetail()
             {
-                return ToString() + Environment.NewLine + "                        " + "CameraNumber:" + command_camera_num;
+                return ToString() + " " + "CameraNumber:" + command_camera_num;
             }
         }
         private class connect_command  // This does not inherent from command because it doesn't need camera number
@@ -710,7 +715,7 @@ namespace visca
             }
             public override string ToStringDetail()
             {
-                return base.ToStringDetail() + Environment.NewLine + "                        " + "Direction(degrees):" + direction_deg + " " + "Pan/TiltSpeed:" + pan_tilt_speed;
+                return base.ToStringDetail() + " " + "Direction(degrees):" + direction_deg + " " + "Pan/TiltSpeed:" + pan_tilt_speed;
             }
         }
         private class pan_tilt_stop_jog_command : command
@@ -881,7 +886,7 @@ namespace visca
             }
             public override string ToStringDetail()
             {
-                return base.ToStringDetail() + Environment.NewLine + "                        " + "PanPosition(degrees):" + pan_pos.degrees + " " + "TiltPosition(degrees):" + tilt_pos.degrees + " " + "Pan/TiltSpeed:" + pan_tilt_speed;
+                return base.ToStringDetail() + " " + "PanPosition(degrees):" + pan_pos.degrees + " " + "TiltPosition(degrees):" + tilt_pos.degrees + " " + "Pan/TiltSpeed:" + pan_tilt_speed;
             }
         }
         private class pan_tilt_cancel_command : command
@@ -950,7 +955,7 @@ namespace visca
             }
             public override string ToStringDetail()
             {
-                return base.ToStringDetail() + Environment.NewLine + "                        " + "SocketNumber:" + socket_num;
+                return base.ToStringDetail() + " " + "SocketNumber:" + socket_num;
             }
         }
         private class pan_tilt_inquiry_command : command
@@ -1088,7 +1093,7 @@ namespace visca
                     d = "OUT";
                 else // if (direction == ZOOM_DIRECTION.NONE)
                     d = "NONE";
-                return base.ToStringDetail() + Environment.NewLine + "                        " + "ZoomDirection:" + d + " " + "ZoomSpeed:" + zoom_speed;
+                return base.ToStringDetail() + " " + "ZoomDirection:" + d + " " + "ZoomSpeed:" + zoom_speed;
             }
         }
         private class zoom_stop_jog_command : command
@@ -1215,7 +1220,7 @@ namespace visca
             }
             public override string ToStringDetail()
             {
-                return base.ToStringDetail() + Environment.NewLine + "                        " + "ZoomPosition(ratio):" + zoom_pos.ratio;
+                return base.ToStringDetail() + " " + "ZoomPosition(ratio):" + zoom_pos.ratio;
             }
         }
         private class zoom_cancel_command : command
@@ -1284,7 +1289,7 @@ namespace visca
             }
             public override string ToStringDetail()
             {
-                return base.ToStringDetail() + Environment.NewLine + "                        " + "SocketNumber:" + socket_num;
+                return base.ToStringDetail() + " " + "SocketNumber:" + socket_num;
             }
         }
         private class zoom_inquiry_command : command
@@ -1383,12 +1388,31 @@ namespace visca
             set
             {
                 if (value.encoder_count < minimum_pan_angle.encoder_count)
+                {
+                    lock (log)
+                    {
+                        log.TraceEvent(TraceEventType.Error, 1, DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " New maximum pan angle can't be less than current minimum pan angle");
+                    }
                     throw new System.ArgumentException("New maximum pan angle can't be less than current minimum pan angle");
+                }
                 if (value.encoder_count > hardware_maximum_pan_angle.encoder_count)
+                {
+                    lock (log)
+                    {
+                        log.TraceEvent(TraceEventType.Error, 1, DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " New maximum pan angle can't be greater than the hardware maximum pan angle");
+                    }
                     throw new System.ArgumentException("New maximum pan angle can't be greater than the hardware maximum pan angle");
+                }
 
                 _maximum_pan_angle = value;
-                Trace.WriteLine(DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " Maximum pan angle changed: " + _maximum_pan_angle.degrees + " degrees");
+                
+                lock (log)
+                {
+                    int line_count = 1;
+                    log.TraceEvent(TraceEventType.Information, line_count++, DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " Maximum pan angle changed");
+                    log.TraceEvent(TraceEventType.Information, line_count++, "-----------------------");
+                    trace_user_position_limits(ref line_count);
+                }
             }
         }
         private angular_position _minimum_pan_angle;
@@ -1398,12 +1422,31 @@ namespace visca
             set
             {
                 if (value.encoder_count > maximum_pan_angle.encoder_count)
+                {
+                    lock (log)
+                    {
+                        log.TraceEvent(TraceEventType.Error, 1, DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " New minimum pan angle can't be greater than current maximum pan angle");
+                    }
                     throw new System.ArgumentException("New minimum pan angle can't be greater than current maximum pan angle");
+                }
                 if (value.encoder_count < hardware_minimum_pan_angle.encoder_count)
+                {
+                    lock (log)
+                    {
+                        log.TraceEvent(TraceEventType.Error, 1, DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " New minimum pan angle can't be less than the hardware minimum pan angle");
+                    }
                     throw new System.ArgumentException("New minimum pan angle can't be less than the hardware minimum pan angle");
+                }
 
                 _minimum_pan_angle = value;
-                Trace.WriteLine(DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " Minimum pan angle changed: " + _minimum_pan_angle.degrees + " degrees");
+
+                lock (log)
+                {
+                    int line_count = 1;
+                    log.TraceEvent(TraceEventType.Information, line_count++, DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " Minimum pan angle changed");
+                    log.TraceEvent(TraceEventType.Information, line_count++, "-----------------------");
+                    trace_user_position_limits(ref line_count);
+                }
             }
         }
         private angular_position _maximum_tilt_angle;
@@ -1413,12 +1456,31 @@ namespace visca
             set
             {
                 if (value.encoder_count < minimum_tilt_angle.encoder_count)
+                {
+                    lock (log)
+                    {
+                        log.TraceEvent(TraceEventType.Error, 1, DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " New maximum tilt angle can't be less than current minimum tilt angle");
+                    }
                     throw new System.ArgumentException("New maximum tilt angle can't be less than current minimum tilt angle");
+                }
                 if (value.encoder_count > hardware_maximum_tilt_angle.encoder_count)
+                {
+                    lock (log)
+                    {
+                        log.TraceEvent(TraceEventType.Error, 1, DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " New maximum tilt angle can't be greater than hardware maximum tilt angle");
+                    }
                     throw new System.ArgumentException("New maximum tilt angle can't be greater than hardware maximum tilt angle");
+                }
 
                 _maximum_tilt_angle = value;
-                Trace.WriteLine(DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " Maximum tilt angle changed: " + _maximum_tilt_angle.degrees + " degrees");
+
+                lock (log)
+                {
+                    int line_count = 1;
+                    log.TraceEvent(TraceEventType.Information, line_count++, DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " Maximum tilt angle changed");
+                    log.TraceEvent(TraceEventType.Information, line_count++, "-----------------------");
+                    trace_user_position_limits(ref line_count);
+                }
             }
         }
         private angular_position _minimum_tilt_angle;
@@ -1428,12 +1490,31 @@ namespace visca
             set
             {
                 if (value.encoder_count > maximum_tilt_angle.encoder_count)
+                {
+                    lock (log)
+                    {
+                        log.TraceEvent(TraceEventType.Error, 1, DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " New minimum tilt angle can't be greater than current maximum tilt angle");
+                    }
                     throw new System.ArgumentException("New minimum tilt angle can't be greater than current maximum tilt angle");
+                }
                 if (value.encoder_count < hardware_minimum_tilt_angle.encoder_count)
+                {
+                    lock (log)
+                    {
+                        log.TraceEvent(TraceEventType.Error, 1, DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " New minimum tilt angle can't be less than hardware minimum tilt angle");
+                    }
                     throw new System.ArgumentException("New minimum tilt angle can't be less than hardware minimum tilt angle");
+                }
 
                 _minimum_tilt_angle = value;
-                Trace.WriteLine(DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " Minimum tilt angle changed: " + _minimum_tilt_angle.degrees + " degrees");
+
+                lock (log)
+                {
+                    int line_count = 1;
+                    log.TraceEvent(TraceEventType.Information, line_count++, DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " Minimum tilt angle changed");
+                    log.TraceEvent(TraceEventType.Information, line_count++, "-----------------------");
+                    trace_user_position_limits(ref line_count);
+                }
             }
         }
         private zoom_position _maximum_zoom_ratio;
@@ -1443,12 +1524,31 @@ namespace visca
             set
             {
                 if (value.encoder_count < minimum_zoom_ratio.encoder_count)
+                {
+                    lock (log)
+                    {
+                        log.TraceEvent(TraceEventType.Error, 1, DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " New maximum zoom ratio can't be less than current minimum zoom ratio");
+                    }
                     throw new System.ArgumentException("New maximum zoom ratio can't be less than current minimum zoom ratio");
+                }
                 if (value.encoder_count > hardware_maximum_zoom_ratio.encoder_count)
+                {
+                    lock (log)
+                    {
+                        log.TraceEvent(TraceEventType.Error, 1, DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " New maximum zoom ratio can't be greater than hardware maximum zoom ratio");
+                    }
                     throw new System.ArgumentException("New maximum zoom ratio can't be greater than hardware maximum zoom ratio");
+                }
 
                 _maximum_zoom_ratio = value;
-                Trace.WriteLine(DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " Maximum zoom ratio changed: " + _maximum_zoom_ratio.ratio);
+
+                lock (log)
+                {
+                    int line_count = 1;
+                    log.TraceEvent(TraceEventType.Information, line_count++, DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " Maximum zoom ratio changed");
+                    log.TraceEvent(TraceEventType.Information, line_count++, "-----------------------");
+                    trace_user_position_limits(ref line_count);
+                }
             }
         }
         private zoom_position _minimum_zoom_ratio;
@@ -1458,12 +1558,44 @@ namespace visca
             set
             {
                 if (value.encoder_count > maximum_zoom_ratio.encoder_count)
+                {
+                    lock (log)
+                    {
+                        log.TraceEvent(TraceEventType.Error, 1, DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " New minimum zoom ratio can't be greater than current maximum zoom ratio");
+                    }
                     throw new System.ArgumentException("New minimum zoom ratio can't be greater than current maximum zoom ratio");
+                }
                 if (value.encoder_count < hardware_minimum_zoom_ratio.encoder_count)
+                {
+                    lock (log)
+                    {
+                        log.TraceEvent(TraceEventType.Error, 1, DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " New minimum zoom ratio can't be less than hardware minimum zoom ratio");
+                    }
                     throw new System.ArgumentException("New minimum zoom ratio can't be less than hardware minimum zoom ratio");
+                }
 
                 _minimum_zoom_ratio = value;
-                Trace.WriteLine(DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " Minimum zoom ratio changed: " + _minimum_zoom_ratio.ratio);
+
+                lock (log)
+                {
+                    int line_count = 1;
+                    log.TraceEvent(TraceEventType.Information, line_count++, DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " Minimum zoom ratio changed");
+                    log.TraceEvent(TraceEventType.Information, line_count++, "-----------------------");
+                    trace_user_position_limits(ref line_count);
+                }
+            }
+        }
+        private void trace_user_position_limits(ref int line_count)
+        {
+            lock (log)
+            {
+                log.TraceEvent(TraceEventType.Information, line_count++, "User Defined Position Limits");
+                log.TraceEvent(TraceEventType.Information, line_count++, " Maximum Pan Angle: " + _maximum_pan_angle.degrees + " degrees");
+                log.TraceEvent(TraceEventType.Information, line_count++, " Minimum Pan Angle: " + _minimum_pan_angle.degrees + " degrees");
+                log.TraceEvent(TraceEventType.Information, line_count++, " Maximum Tilt Angle: " + _maximum_tilt_angle.degrees + " degrees");
+                log.TraceEvent(TraceEventType.Information, line_count++, " Minimum Tilt Angle: " + _minimum_tilt_angle.degrees + " degrees");
+                log.TraceEvent(TraceEventType.Information, line_count++, " Maximum Zoom Ratio: " + _minimum_zoom_ratio.ratio);
+                log.TraceEvent(TraceEventType.Information, line_count++, " Minimum Zoom Ratio: " + _minimum_zoom_ratio.ratio);
             }
         }
 
@@ -1473,15 +1605,89 @@ namespace visca
         public angular_position pan { get; private set; } = new angular_position();
         public angular_position tilt { get; private set; } = new angular_position();
         public zoom_position zoom { get; private set; } = new zoom_position();
+        private void trace_camera_status(ref int line_count)
+        {
+            lock (log)
+            {
+                log.TraceEvent(TraceEventType.Information, line_count++, "Camera Status");
+
+                if (pan_tilt_status == DRIVE_STATUS.JOG)
+                    log.TraceEvent(TraceEventType.Information, line_count++, " Pan/Tilt Drive Status: JOG");
+                else if (pan_tilt_status == DRIVE_STATUS.FULL_STOP)
+                    log.TraceEvent(TraceEventType.Information, line_count++, " Pan/Tilt Drive Status: FULL STOP");
+                else if (pan_tilt_status == DRIVE_STATUS.STOP_JOG)
+                    log.TraceEvent(TraceEventType.Information, line_count++, " Pan/Tilt Drive Status: STOP JOG");
+                else if (pan_tilt_status == DRIVE_STATUS.ABSOLUTE)
+                    log.TraceEvent(TraceEventType.Information, line_count++, " Pan/Tilt Drive Status: ABSOLUTE");
+                else // if (pan_tilt_status == DRIVE_STATUS.STOP_ABSOLUTE)
+                    log.TraceEvent(TraceEventType.Information, line_count++, " Pan/Tilt Drive Status: STOP ABSOLUTE");
+
+                if (zoom_status == DRIVE_STATUS.JOG)
+                    log.TraceEvent(TraceEventType.Information, line_count++, " Zoom Drive Status: JOG");
+                else if (zoom_status == DRIVE_STATUS.FULL_STOP)
+                    log.TraceEvent(TraceEventType.Information, line_count++, " Zoom Drive Status: FULL STOP");
+                else if (zoom_status == DRIVE_STATUS.STOP_JOG)
+                    log.TraceEvent(TraceEventType.Information, line_count++, " Zoom Drive Status: STOP JOG");
+                else if (zoom_status == DRIVE_STATUS.ABSOLUTE)
+                    log.TraceEvent(TraceEventType.Information, line_count++, " Zoom Drive Status: ABSOLUTE");
+                else // if (zoom_status == DRIVE_STATUS.STOP_ABSOLUTE)
+                    log.TraceEvent(TraceEventType.Information, line_count++, " Zoom Drive Status: STOP ABSOLUTE");
+            }
+        }
+        private void trace_camera_position(ref int line_count)
+        {
+            lock (log)
+            {
+                log.TraceEvent(TraceEventType.Information, line_count++, "Camera Position");
+
+                log.TraceEvent(TraceEventType.Information, line_count++, " Pan Position: " + pan.degrees + " degrees");
+                log.TraceEvent(TraceEventType.Information, line_count++, " Tilt Position: " + tilt.degrees + " degrees");
+                log.TraceEvent(TraceEventType.Information, line_count++, " Zoom Ratio: " + zoom.ratio);
+            }
+        }
 
         // Command buffer
-        private ObservableCollection<command> command_buffer { get; set; } = new ObservableCollection<command>();
+        private List<command> command_buffer { get; set; } = new List<command>();
         private command failed_command { get; set; } = null;
         private command last_successful_pan_tilt_cmd { get; set; } = null;
         private command last_successful_zoom_cmd { get; set; } = null;
         private command dispatched_cmd { get; set; } = null;
         private command socket_one_cmd { get; set; } = null;
         private command socket_two_cmd { get; set; } = null;
+        private void trace_command_buffer(ref int line_count)
+        {
+            lock (log)
+            {
+                log.TraceEvent(TraceEventType.Information, line_count++, "Command Buffer");
+
+                if (command_buffer.Count == 0)
+                    log.TraceEvent(TraceEventType.Information, line_count++, " [0] - NULL");
+                else
+                    for (int i = 0; i < command_buffer.Count; ++i)
+                        log.TraceEvent(TraceEventType.Information, line_count++, " [" + i + "] - " + command_buffer[i].ToString());
+
+                if (failed_command == null)
+                    log.TraceEvent(TraceEventType.Information, line_count++, " Failed Command: NULL");
+                else
+                    log.TraceEvent(TraceEventType.Information, line_count++, " Failed Command: " + failed_command.ToString());
+                if (last_successful_pan_tilt_cmd == null)
+                    log.TraceEvent(TraceEventType.Information, line_count++, " Last Successful Pan/Tilt Command: NULL");
+                else
+                    log.TraceEvent(TraceEventType.Information, line_count++, " Last Successful Pan/Tilt Command: " + last_successful_pan_tilt_cmd.ToString());
+                if (last_successful_zoom_cmd == null)
+                    log.TraceEvent(TraceEventType.Information, line_count++, " Last Successful Zoom Command: NULL");
+                else
+                    log.TraceEvent(TraceEventType.Information, line_count++, " Last Successful Zoom Command: " + last_successful_zoom_cmd.ToString());
+                if (socket_one_cmd == null)
+                    log.TraceEvent(TraceEventType.Information, line_count++, " Socket One Command: NULL");
+                else
+                    log.TraceEvent(TraceEventType.Information, line_count++, " Socket One Command: " + socket_one_cmd.ToString());
+                if (socket_two_cmd == null)
+                    log.TraceEvent(TraceEventType.Information, line_count++, " Socket Two Command: NULL");
+                else
+                    log.TraceEvent(TraceEventType.Information, line_count++, " Socket Two Command: " + socket_two_cmd.ToString());
+            }
+        }
 
         // Error handlers
         public delegate void CameraHardwareErrorEventHandler(object sender, EventArgs e);
@@ -1490,10 +1696,7 @@ namespace visca
         public event CameraHardwareErrorEventHandler command_error;  // Message triggered when a command fails
         public delegate void JogOutOfRangeEventHandler(object sender, EventArgs e);
         public event JogOutOfRangeEventHandler pan_tilt_jog_limit_error;  // Message triggered when the pan/tilt drive reaches its limit
-        public event JogOutOfRangeEventHandler zoom_jog_limit_error;  // Message triggered when the zoom drive reaches its limit
-
-        // Thread control, used to tell threads to stop
-        private CancellationTokenSource thread_control { get; set; } = new CancellationTokenSource();
+        public event JogOutOfRangeEventHandler zoom_jog_limit_error;  // Message triggered when the zoom drive reaches its limit 
 
         // Receive thread
         private int get_response(out List<int> response_buffer, bool use_timeout = true)
@@ -1535,213 +1738,296 @@ namespace visca
                     if (response == VISCA_CODE.RESPONSE_TIMEOUT)  // A timeout on the serial port occured, this lets us loop back up and check if threads have been cancelled (using "thread_control") while waiting for a message
                         continue;
 
-                    int socket_num = response_buffer[1] & 0x0F;
-                    if (response == VISCA_CODE.RESPONSE_ACK)  // A command has been acknowledged
+                    lock (command_buffer)
                     {
-                        // Set the status of the camera drives
-                        if (dispatched_cmd is pan_tilt_absolute_command)
-                            pan_tilt_status = DRIVE_STATUS.ABSOLUTE;
-                        else if (dispatched_cmd is pan_tilt_cancel_command)
-                            pan_tilt_status = DRIVE_STATUS.STOP_ABSOLUTE;
-                        else if (dispatched_cmd is pan_tilt_jog_command)
-                            pan_tilt_status = DRIVE_STATUS.JOG;
-                        else if (dispatched_cmd is pan_tilt_stop_jog_command)
-                            pan_tilt_status = DRIVE_STATUS.STOP_JOG;
-                        else if (dispatched_cmd is zoom_absolute_command)
-                            zoom_status = DRIVE_STATUS.ABSOLUTE;
-                        else if (dispatched_cmd is zoom_cancel_command)
-                            zoom_status = DRIVE_STATUS.STOP_ABSOLUTE;
-                        else if (dispatched_cmd is zoom_jog_command)
-                            zoom_status = DRIVE_STATUS.JOG;
-                        else if (dispatched_cmd is zoom_stop_jog_command)
-                            zoom_status = DRIVE_STATUS.STOP_JOG;
-
-                        if (socket_num == 1)  // The command is in socket one
-                            socket_one_cmd = dispatched_cmd;
-                        else  // The command is in socket two
-                            socket_two_cmd = dispatched_cmd;
-                        Trace.WriteLine(DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " Command acknowledged: " + dispatched_cmd.ToString());
-                        dispatched_cmd = null;  // Empty the dispatched command
-
-                        // If there are two sockets being used, no more commands can happen
-                        if (socket_one_cmd != null && socket_two_cmd != null)  // Both sockets have something in them
-                            socket_available.Reset();
-
-                        serial_channel_open.Set();  // Inform the command dispatch thread that serial communcation is available
-                    }
-                    else if (response == VISCA_CODE.RESPONSE_COMPLETED)  // A command has been completed
-                    {
-                        if (socket_num == 0)  // Special command completed
+                        int socket_num = response_buffer[1] & 0x0F;
+                        if (response == VISCA_CODE.RESPONSE_ACK)  // A command has been acknowledged
                         {
-                            if (response_buffer.Count == 11)  // Inquiry - pan/tilt position
+                            command trace_c = dispatched_cmd;
+
+                            // Set the status of the camera drives
+                            if (dispatched_cmd is pan_tilt_absolute_command)
+                                pan_tilt_status = DRIVE_STATUS.ABSOLUTE;
+                            else if (dispatched_cmd is pan_tilt_cancel_command)
+                                pan_tilt_status = DRIVE_STATUS.STOP_ABSOLUTE;
+                            else if (dispatched_cmd is pan_tilt_jog_command)
+                                pan_tilt_status = DRIVE_STATUS.JOG;
+                            else if (dispatched_cmd is pan_tilt_stop_jog_command)
+                                pan_tilt_status = DRIVE_STATUS.STOP_JOG;
+                            else if (dispatched_cmd is zoom_absolute_command)
+                                zoom_status = DRIVE_STATUS.ABSOLUTE;
+                            else if (dispatched_cmd is zoom_cancel_command)
+                                zoom_status = DRIVE_STATUS.STOP_ABSOLUTE;
+                            else if (dispatched_cmd is zoom_jog_command)
+                                zoom_status = DRIVE_STATUS.JOG;
+                            else if (dispatched_cmd is zoom_stop_jog_command)
+                                zoom_status = DRIVE_STATUS.STOP_JOG;
+
+                            if (socket_num == 1)  // The command is in socket one
+                                socket_one_cmd = dispatched_cmd;
+                            else  // The command is in socket two
+                                socket_two_cmd = dispatched_cmd;
+                            dispatched_cmd = null;  // Empty the dispatched command
+
+                            // If there are two sockets being used, no more commands can happen
+                            if (socket_one_cmd != null && socket_two_cmd != null)  // Both sockets have something in them
+                                socket_available.Reset();
+
+                            serial_channel_open.Set();  // Inform the command dispatch thread that serial communcation is available
+
+                            // Trace camera status and command buffer
+                            lock (log)
                             {
-                                int pan_range = maximum_pan_angle.encoder_count - minimum_pan_angle.encoder_count;
-                                int tilt_range = maximum_tilt_angle.encoder_count - minimum_tilt_angle.encoder_count;
-                                short temp_pan_enc = (short)((response_buffer[2] << 12) | (response_buffer[3] << 8) | (response_buffer[4] << 4) | (response_buffer[5]));
-                                short temp_tilt_enc = (short)((response_buffer[6] << 12) | (response_buffer[7] << 8) | (response_buffer[8] << 4) | (response_buffer[9]));
-
-                                if (temp_pan_enc > hardware_maximum_pan_angle.encoder_count + pan_range * 0.05 ||  // Response outside of operating range (allowing for 5% over limits indicated in the manual)
-                                    temp_pan_enc < hardware_minimum_pan_angle.encoder_count - pan_range * 0.05 ||
-                                    temp_tilt_enc > hardware_maximum_tilt_angle.encoder_count + tilt_range * 0.05 ||
-                                    temp_tilt_enc < hardware_minimum_tilt_angle.encoder_count - tilt_range * 0.05)
-                                {
-                                    Trace.WriteLine(DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " Position data error (received invalid pan/tilt angles): " + dispatched_cmd.ToString());
-                                    failed_command = dispatched_cmd;
-                                    dispatched_cmd = null;
-                                    if (position_data_error != null) position_data_error(this, EventArgs.Empty);  // Inform the "user" that an error happened
-                                }
-                                else  // Data is good
-                                {
-                                    Trace.WriteLine(DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " Command complete: " + dispatched_cmd.ToString());
-                                    dispatched_cmd = null;  // The inquiry command is in the dispatched_cmd variable (not in a socket)
-                                    pan.encoder_count = temp_pan_enc;
-                                    tilt.encoder_count = temp_tilt_enc;
-
-                                    serial_channel_open.Set();  // Signal the dispatch thread that its ok to start
-                                    pan_tilt_inquiry_complete.Set();  // Signal the after stop thread that its ok to use data now
-
-                                    // Are we past the limit?
-                                    if (pan.encoder_count > maximum_pan_angle.encoder_count || pan.encoder_count < minimum_pan_angle.encoder_count ||
-                                        tilt.encoder_count > maximum_tilt_angle.encoder_count || tilt.encoder_count < minimum_tilt_angle.encoder_count)
-                                    {
-                                        Trace.WriteLine(DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " Pan/Tilt jog limit error (outside user specified limit)");
-                                        if (pan_tilt_jog_limit_error != null) pan_tilt_jog_limit_error(this, EventArgs.Empty);  // Inform the "user" that we hit a limit
-                                    }
-                                }
-                            }
-                            else if (response_buffer.Count == 7)  // Inquiry - zoom position
-                            {
-                                int zoom_range = maximum_zoom_ratio.encoder_count - minimum_zoom_ratio.encoder_count;
-                                short temp_zoom_enc = (short)((response_buffer[2] << 12) | (response_buffer[3] << 8) | (response_buffer[4] << 4) | (response_buffer[5]));
-
-                                if (temp_zoom_enc > hardware_maximum_zoom_ratio.encoder_count + zoom_range * 0.05 ||  // Response outside of operating range (allowing for 5% over limits indicated in the manual)
-                                    temp_zoom_enc < hardware_minimum_zoom_ratio.encoder_count - zoom_range * 0.05)
-                                {
-                                    Trace.WriteLine(DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " Position data error (received invalid zoom ratio): " + dispatched_cmd.ToString());
-                                    failed_command = dispatched_cmd;
-                                    dispatched_cmd = null;
-                                    if (position_data_error != null) position_data_error(this, EventArgs.Empty);  // Inform the "user" that an error happened
-                                }
-                                else  // Data is good
-                                {
-                                    Trace.WriteLine(DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " Command complete: " + dispatched_cmd.ToString());
-                                    dispatched_cmd = null;  // The inquiry command is in the dispatched_cmd variable (not in a socket)
-                                    zoom.encoder_count = temp_zoom_enc;
-
-                                    serial_channel_open.Set();  // Signal the dispatch thread that its ok to start
-                                    zoom_inquiry_complete.Set();  // Signal the after stop thread that its ok to use data now
-
-                                    // Are we past the limit?
-                                    if (zoom.encoder_count > maximum_zoom_ratio.encoder_count || zoom.encoder_count < minimum_zoom_ratio.encoder_count)
-                                    {
-                                        Trace.WriteLine(DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " Zoom jog limit error (outside user specified limit)");
-                                        if (zoom_jog_limit_error != null) zoom_jog_limit_error(this, EventArgs.Empty);  // Inform the "user" that we hit a limit
-                                    }
-                                }
-                            }
-                            else if (response_buffer.Count == 3)  // Emergency stop complete
-                            {
-                                Trace.WriteLine(DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " Command complete: " + dispatched_cmd.ToString());
-
-                                pan_tilt_status = DRIVE_STATUS.FULL_STOP;
-                                zoom_status = DRIVE_STATUS.FULL_STOP;
-                                socket_one_cmd = null;  // Reset the socket commands
-                                socket_two_cmd = null;  // Reset the socket commands
-                                dispatched_cmd = null;  // Reset the dispatched command
-                                last_successful_pan_tilt_cmd = null;  // Reset the last successful commands
-                                last_successful_zoom_cmd = null;      // Reset the last successful commands
-                                command_buffer.Clear();
-
-                                emergency_stop_turnstyle.Set();  // Inform the GUI level function that stop has completed
-                                socket_available.Set();  // Inform the command dispatch thread that a socket is available
-                                serial_channel_open.Set();  // Signal the dispatch thread that its ok to start
-
-                                pan_tilt_inquiry_after_stop = true;  // Doing both inquiries here because we don't know which drives stopped moving
-                                zoom_inquiry_after_stop = true;      // Also it doesn't hurt to do an extra inquiry
-                                after_stop.Set();  // Continue doing inquiries until the drive has stopped moving
+                                int line_count = 1;
+                                log.TraceEvent(TraceEventType.Information, line_count++, DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " Command acknowledged: " + trace_c.ToString());
+                                log.TraceEvent(TraceEventType.Information, line_count++, "-----------------------");
+                                trace_camera_status(ref line_count);
+                                trace_command_buffer(ref line_count);
                             }
                         }
-                        else  // A command has been completed
+                        else if (response == VISCA_CODE.RESPONSE_COMPLETED)  // A command has been completed
                         {
-                            command temp;
-                            if (socket_num == 1)  // The command was in socket one
-                                temp = socket_one_cmd;
-                            else if (socket_num == 2)  // The command was in socket two
-                                temp = socket_two_cmd;
-                            else  // The socket number is invalid
+                            if (socket_num == 0)  // Special command completed
                             {
-                                Trace.WriteLine(DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " Command error (received invalid socket number)");
-                                if (command_error != null) command_error(this, EventArgs.Empty);  // Inform the "user" that there was an error
-                                return;
-                            }
-
-                            if (temp is pan_tilt_absolute_command || temp is pan_tilt_jog_command || temp is pan_tilt_stop_jog_command)  // The command is a pan/tilt command.  Note that a stop absolute does not show up here, but as an "error"
-                            {
-                                last_successful_pan_tilt_cmd = temp;
-
-                                if (temp is pan_tilt_absolute_command)  // An absolute movement completed
+                                if (response_buffer.Count == 11)  // Inquiry - pan/tilt position
                                 {
+                                    int pan_range = maximum_pan_angle.encoder_count - minimum_pan_angle.encoder_count;
+                                    int tilt_range = maximum_tilt_angle.encoder_count - minimum_tilt_angle.encoder_count;
+                                    short temp_pan_enc = (short)((response_buffer[2] << 12) | (response_buffer[3] << 8) | (response_buffer[4] << 4) | (response_buffer[5]));
+                                    short temp_tilt_enc = (short)((response_buffer[6] << 12) | (response_buffer[7] << 8) | (response_buffer[8] << 4) | (response_buffer[9]));
+
+                                    if (temp_pan_enc > hardware_maximum_pan_angle.encoder_count + pan_range * 0.05 ||  // Response outside of operating range (allowing for 5% over limits indicated in the manual)
+                                        temp_pan_enc < hardware_minimum_pan_angle.encoder_count - pan_range * 0.05 ||
+                                        temp_tilt_enc > hardware_maximum_tilt_angle.encoder_count + tilt_range * 0.05 ||
+                                        temp_tilt_enc < hardware_minimum_tilt_angle.encoder_count - tilt_range * 0.05)
+                                    {
+                                        failed_command = dispatched_cmd;
+                                        dispatched_cmd = null;
+
+                                        // Trace the command buffer
+                                        lock (log)
+                                        {
+                                            int line_count = 1;
+                                            log.TraceEvent(TraceEventType.Error, line_count++, DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " Position data error (received invalid pan/tilt angles): " + failed_command.ToString());
+                                            log.TraceEvent(TraceEventType.Information, line_count++, "-----------------------");
+                                            trace_command_buffer(ref line_count);
+                                        }
+
+                                        if (position_data_error != null) position_data_error(this, EventArgs.Empty);  // Inform the "user" that an error happened
+                                    }
+                                    else  // Data is good
+                                    {
+                                        command trace_c = dispatched_cmd;
+                                        dispatched_cmd = null;  // The inquiry command is in the dispatched_cmd variable (not in a socket)
+                                        pan.encoder_count = temp_pan_enc;
+                                        tilt.encoder_count = temp_tilt_enc;
+
+                                        serial_channel_open.Set();  // Signal the dispatch thread that its ok to start
+                                        pan_tilt_inquiry_complete.Set();  // Signal the after stop thread that its ok to use data now
+
+                                        // Trace the new position and command buffer
+                                        lock (log)
+                                        {
+                                            int line_count = 1;
+                                            log.TraceEvent(TraceEventType.Information, line_count++, DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " Command complete: " + trace_c.ToString());
+                                            log.TraceEvent(TraceEventType.Information, line_count++, "-----------------------");
+                                            trace_command_buffer(ref line_count);
+                                            trace_camera_position(ref line_count);
+                                        }
+
+                                        // Are we past the limit?
+                                        if (pan.encoder_count > maximum_pan_angle.encoder_count || pan.encoder_count < minimum_pan_angle.encoder_count ||
+                                            tilt.encoder_count > maximum_tilt_angle.encoder_count || tilt.encoder_count < minimum_tilt_angle.encoder_count)
+                                        {
+                                            lock (log)
+                                            {
+                                                log.TraceEvent(TraceEventType.Warning, 1, DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " Pan/Tilt jog limit error (outside user specified limit)");
+                                            }
+                                            if (pan_tilt_jog_limit_error != null) pan_tilt_jog_limit_error(this, EventArgs.Empty);  // Inform the "user" that we hit a limit
+                                        }
+                                    }
+                                }
+                                else if (response_buffer.Count == 7)  // Inquiry - zoom position
+                                {
+                                    int zoom_range = maximum_zoom_ratio.encoder_count - minimum_zoom_ratio.encoder_count;
+                                    short temp_zoom_enc = (short)((response_buffer[2] << 12) | (response_buffer[3] << 8) | (response_buffer[4] << 4) | (response_buffer[5]));
+
+                                    if (temp_zoom_enc > hardware_maximum_zoom_ratio.encoder_count + zoom_range * 0.05 ||  // Response outside of operating range (allowing for 5% over limits indicated in the manual)
+                                        temp_zoom_enc < hardware_minimum_zoom_ratio.encoder_count - zoom_range * 0.05)
+                                    {
+                                        failed_command = dispatched_cmd;
+                                        dispatched_cmd = null;
+
+                                        // Trace the command buffer
+                                        lock (log)
+                                        {
+                                            int line_count = 1;
+                                            log.TraceEvent(TraceEventType.Error, line_count++, DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " Position data error (received invalid zoom ratio): " + failed_command.ToString());
+                                            log.TraceEvent(TraceEventType.Information, line_count++, "-----------------------");
+                                            trace_command_buffer(ref line_count);
+                                        }
+
+                                        if (position_data_error != null) position_data_error(this, EventArgs.Empty);  // Inform the "user" that an error happened
+                                    }
+                                    else  // Data is good
+                                    {
+                                        command trace_c = dispatched_cmd;
+                                        dispatched_cmd = null;  // The inquiry command is in the dispatched_cmd variable (not in a socket)
+                                        zoom.encoder_count = temp_zoom_enc;
+
+                                        serial_channel_open.Set();  // Signal the dispatch thread that its ok to start
+                                        zoom_inquiry_complete.Set();  // Signal the after stop thread that its ok to use data now
+
+                                        // Trace the new position and command buffer
+                                        lock (log)
+                                        {
+                                            int line_count = 1;
+                                            log.TraceEvent(TraceEventType.Information, line_count++, DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " Command complete: " + trace_c.ToString());
+                                            log.TraceEvent(TraceEventType.Information, line_count++, "-----------------------");
+                                            trace_command_buffer(ref line_count);
+                                            trace_camera_position(ref line_count);
+                                        }
+
+                                        // Are we past the limit?
+                                        if (zoom.encoder_count > maximum_zoom_ratio.encoder_count || zoom.encoder_count < minimum_zoom_ratio.encoder_count)
+                                        {
+                                            lock (log)
+                                            {
+                                                log.TraceEvent(TraceEventType.Warning, 1, DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " Zoom jog limit error (outside user specified limit)");
+                                            }
+                                            if (zoom_jog_limit_error != null) zoom_jog_limit_error(this, EventArgs.Empty);  // Inform the "user" that we hit a limit
+                                        }
+                                    }
+                                }
+                                else if (response_buffer.Count == 3)  // Emergency stop complete
+                                {
+                                    command trace_c = dispatched_cmd;
+
                                     pan_tilt_status = DRIVE_STATUS.FULL_STOP;
+                                    zoom_status = DRIVE_STATUS.FULL_STOP;
+                                    socket_one_cmd = null;  // Reset the socket commands
+                                    socket_two_cmd = null;  // Reset the socket commands
+                                    dispatched_cmd = null;  // Reset the dispatched command
+                                    last_successful_pan_tilt_cmd = null;  // Reset the last successful commands
+                                    last_successful_zoom_cmd = null;      // Reset the last successful commands
+                                    command_buffer.Clear();
 
-                                    pan_tilt_inquiry_after_stop = true;
-                                    after_stop.Set();  // Continue doing inquiries until the drive has stopped moving
-                                }
-                                else if (temp is pan_tilt_jog_command)  // The drive is now jogging
-                                    pan_tilt_status = DRIVE_STATUS.JOG;  // Note that this should already be set to jog at this point (from the acknowledgement), doing it here for clarity
-                                else if (temp is pan_tilt_stop_jog_command)  // The drive has stopped completely from a stop jog command.  Note that it is not actually fully stopped, so an absolute command at this point is not possible.  There is code to "fix" this bug in error section below.
-                                {
-                                    pan_tilt_status = DRIVE_STATUS.FULL_STOP;
+                                    emergency_stop_turnstyle.Set();  // Inform the GUI level function that stop has completed
+                                    socket_available.Set();  // Inform the command dispatch thread that a socket is available
+                                    serial_channel_open.Set();  // Signal the dispatch thread that its ok to start
 
-                                    pan_tilt_inquiry_after_stop = true;
+                                    // Trace the camera status and command buffer
+                                    lock (log)
+                                    {
+                                        int line_count = 1;
+                                        log.TraceEvent(TraceEventType.Information, line_count++, DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " Command complete: " + trace_c.ToString());
+                                        log.TraceEvent(TraceEventType.Information, line_count++, "-----------------------");
+                                        trace_camera_status(ref line_count);
+                                        trace_command_buffer(ref line_count);
+                                    }
+
+                                    pan_tilt_inquiry_after_stop = true;  // Doing both inquiries here because we don't know which drives stopped moving
+                                    zoom_inquiry_after_stop = true;      // Also it doesn't hurt to do an extra inquiry
                                     after_stop.Set();  // Continue doing inquiries until the drive has stopped moving
                                 }
                             }
-                            else if (temp is zoom_absolute_command || temp is zoom_jog_command || temp is zoom_stop_jog_command)  // The command is a zoom command.  Note that a stop absolute does not show up here, but as an "error"
+                            else  // A command has been completed
                             {
-                                last_successful_zoom_cmd = temp;
-
-                                if (temp is zoom_absolute_command)  // An absolute movement completed
+                                command temp;
+                                if (socket_num == 1)  // The command was in socket one
+                                    temp = socket_one_cmd;
+                                else if (socket_num == 2)  // The command was in socket two
+                                    temp = socket_two_cmd;
+                                else  // The socket number is invalid
                                 {
-                                    zoom_status = DRIVE_STATUS.FULL_STOP;
-
-                                    zoom_inquiry_after_stop = true;
-                                    after_stop.Set();  // Continue doing inquiries until the drive has stopped moving
+                                    lock (log)
+                                    {
+                                        log.TraceEvent(TraceEventType.Critical, 1, DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " Command error (received invalid socket number)");
+                                    }
+                                    if (command_error != null) command_error(this, EventArgs.Empty);  // Inform the "user" that there was an error
+                                    return;  // This is a critical error that I'm not sure how to handle yet, so just return (and hope this doesn't happen for now)
                                 }
-                                else if (temp is zoom_jog_command)  // The drive is now jogging
-                                    zoom_status = DRIVE_STATUS.JOG;  // Note that this should already be set to jog at this point (from the acknowledgement, doing it here for clarity
-                                else if (temp is zoom_stop_jog_command)  // The drive has stopped completely from a stop jog command.  Note that it is not actually fully stopped, so an absolute command at this point is not possible.  There is code to "fix" this bug in the error section.
-                                {
-                                    zoom_status = DRIVE_STATUS.FULL_STOP;
 
-                                    zoom_inquiry_after_stop = true;
-                                    after_stop.Set();  // Continue doing inquiries until the drive has stopped moving
+                                if (temp is pan_tilt_absolute_command || temp is pan_tilt_jog_command || temp is pan_tilt_stop_jog_command)  // The command is a pan/tilt command.  Note that a stop absolute does not show up here, but as an "error"
+                                {
+                                    last_successful_pan_tilt_cmd = temp;
+
+                                    if (temp is pan_tilt_absolute_command)  // An absolute movement completed
+                                    {
+                                        pan_tilt_status = DRIVE_STATUS.FULL_STOP;
+
+                                        pan_tilt_inquiry_after_stop = true;
+                                        after_stop.Set();  // Continue doing inquiries until the drive has stopped moving
+                                    }
+                                    else if (temp is pan_tilt_jog_command)  // The drive is now jogging
+                                        pan_tilt_status = DRIVE_STATUS.JOG;  // Note that this should already be set to jog at this point (from the acknowledgement), doing it here for clarity
+                                    else if (temp is pan_tilt_stop_jog_command)  // The drive has stopped completely from a stop jog command.  Note that it is not actually fully stopped, so an absolute command at this point is not possible.  There is code to "fix" this bug in error section below.
+                                    {
+                                        pan_tilt_status = DRIVE_STATUS.FULL_STOP;
+
+                                        pan_tilt_inquiry_after_stop = true;
+                                        after_stop.Set();  // Continue doing inquiries until the drive has stopped moving
+                                    }
+                                }
+                                else if (temp is zoom_absolute_command || temp is zoom_jog_command || temp is zoom_stop_jog_command)  // The command is a zoom command.  Note that a stop absolute does not show up here, but as an "error"
+                                {
+                                    last_successful_zoom_cmd = temp;
+
+                                    if (temp is zoom_absolute_command)  // An absolute movement completed
+                                    {
+                                        zoom_status = DRIVE_STATUS.FULL_STOP;
+
+                                        zoom_inquiry_after_stop = true;
+                                        after_stop.Set();  // Continue doing inquiries until the drive has stopped moving
+                                    }
+                                    else if (temp is zoom_jog_command)  // The drive is now jogging
+                                        zoom_status = DRIVE_STATUS.JOG;  // Note that this should already be set to jog at this point (from the acknowledgement, doing it here for clarity
+                                    else if (temp is zoom_stop_jog_command)  // The drive has stopped completely from a stop jog command.  Note that it is not actually fully stopped, so an absolute command at this point is not possible.  There is code to "fix" this bug in the error section.
+                                    {
+                                        zoom_status = DRIVE_STATUS.FULL_STOP;
+
+                                        zoom_inquiry_after_stop = true;
+                                        after_stop.Set();  // Continue doing inquiries until the drive has stopped moving
+                                    }
+                                }
+
+                                // Empty the socket the command was in
+                                if (socket_num == 1)  // The command was in socket one
+                                    socket_one_cmd = null;
+                                else  // The command was in socket two
+                                    socket_two_cmd = null;
+                                socket_available.Set();  // There is now a socket available, inform the command dispatch thread that a socket is available
+
+                                // Trace the camera status and command buffer
+                                lock (log)
+                                {
+                                    int line_count = 1;
+                                    log.TraceEvent(TraceEventType.Information, line_count++, DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " Command complete: " + temp.ToString());
+                                    log.TraceEvent(TraceEventType.Information, line_count++, "-----------------------");
+                                    trace_camera_status(ref line_count);
+                                    trace_command_buffer(ref line_count);
                                 }
                             }
-
-                            Trace.WriteLine(DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " Command complete: " + temp.ToString());
-
-                            // Empty the socket the command was in
-                            if (socket_num == 1)  // The command was in socket one
-                                socket_one_cmd = null;
-                            else  // The command was in socket two
-                                socket_two_cmd = null;
-                            socket_available.Set();  // There is now a socket available, inform the command dispatch thread that a socket is available
                         }
-                    }
-                    else if (response == VISCA_CODE.RESPONSE_ERROR)  // There was an error
-                    {
-                        // This code is preliminary
-                        // Only has a "stop" mode, in the future there should be a "resend the borked message" mode
-                        int error_type = response_buffer[2];
-
-                        lock (command_buffer)
+                        else if (response == VISCA_CODE.RESPONSE_ERROR)  // There was an error
                         {
+                            // This code is preliminary
+                            // Only has a "stop" mode, in the future there should be a "resend the borked message" mode
+                            int error_type = response_buffer[2];
+
                             if (error_type == 0x01)  // Message length error
                             {
                                 failed_command = dispatched_cmd;
                                 dispatched_cmd = null;
 
-                                Trace.WriteLine(DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " Command error (message length error): " + failed_command.ToString());
+                                // Trace the command buffer
+                                lock (log)
+                                {
+                                    int line_count = 1;
+                                    log.TraceEvent(TraceEventType.Error, line_count++, DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " Command error (message length error): " + failed_command.ToString());
+                                    log.TraceEvent(TraceEventType.Information, line_count++, "-----------------------");
+                                    trace_command_buffer(ref line_count);
+                                }
                                 if (command_error != null) command_error(this, EventArgs.Empty);  // Inform the "user" that an error happened
                             }
                             else if (error_type == 0x02)  // Message syntax error
@@ -1749,7 +2035,14 @@ namespace visca
                                 failed_command = dispatched_cmd;
                                 dispatched_cmd = null;
 
-                                Trace.WriteLine(DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " Command error (message syntax error): " + failed_command.ToString());
+                                // Trace the command buffer
+                                lock (log)
+                                {
+                                    int line_count = 1;
+                                    log.TraceEvent(TraceEventType.Error, line_count++, DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " Command error (message syntax error): " + failed_command.ToString());
+                                    log.TraceEvent(TraceEventType.Information, line_count++, "-----------------------");
+                                    trace_command_buffer(ref line_count);
+                                }
                                 if (command_error != null) command_error(this, EventArgs.Empty);  // Inform the "user" that an error happened
                             }
                             else if (error_type == 0x03)  // Command buffer full
@@ -1757,7 +2050,14 @@ namespace visca
                                 failed_command = dispatched_cmd;
                                 dispatched_cmd = null;
 
-                                Trace.WriteLine(DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " Command error (command buffer full error): " + failed_command.ToString());
+                                // Trace the command buffer
+                                lock (log)
+                                {
+                                    int line_count = 1;
+                                    log.TraceEvent(TraceEventType.Error, line_count++, DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " Command error (command buffer full error): " + failed_command.ToString());
+                                    log.TraceEvent(TraceEventType.Information, line_count++, "-----------------------");
+                                    trace_command_buffer(ref line_count);
+                                }
                                 if (command_error != null) command_error(this, EventArgs.Empty);  // Inform the "user" that an error happened
                             }
                             else if (error_type == 0x04)  // Command cancelled.  This only can happen for cancelling an absolute movement
@@ -1785,8 +2085,6 @@ namespace visca
                                     after_stop.Set();  // Continue doing inquiries until the drive has stopped moving
                                 }
 
-                                Trace.WriteLine(DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " Command complete: " + dispatched_cmd.ToString());
-
                                 // Empty the socket the command was in
                                 if (socket_num == 1)  // The command was in socket one
                                     socket_one_cmd = null;
@@ -1796,19 +2094,41 @@ namespace visca
 
                                 socket_available.Set();  // There is now a socket available, inform the command dispatch thread that a socket is available
                                 serial_channel_open.Set();  // Inform the command dispatch thread that serial communcation is available
+
+                                // Trace the camera status and command buffer
+                                lock (log)
+                                {
+                                    int line_count = 1;
+                                    log.TraceEvent(TraceEventType.Information, line_count++, DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " Command complete: " + temp.ToString());
+                                    log.TraceEvent(TraceEventType.Information, line_count++, "-----------------------");
+                                    trace_camera_status(ref line_count);
+                                    trace_command_buffer(ref line_count);
+                                }
                             }
                             else if (error_type == 0x05)  // No socket (to be cancelled) error.  This could happen if as a cancel was being dispatched, an absolute movement completed
                             {
-                                Trace.WriteLine(DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " Command error (no socket error): " + dispatched_cmd.ToString());
+                                command trace_c = dispatched_cmd;
+
                                 // Note: we don't inform the user of an error because it isn't an "error"
                                 dispatched_cmd = null;
                                 socket_available.Set();  // Inform the command dispatch thread that a socket is available
                                 serial_channel_open.Set();  // Inform the command dispatch thread that serial communcation is available
+
+                                // Trace the command buffer
+                                lock (log)
+                                {
+                                    int line_count = 1;
+                                    log.TraceEvent(TraceEventType.Information, line_count++, DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " Command error (no socket error): " + trace_c.ToString());
+                                    log.TraceEvent(TraceEventType.Information, line_count++, "-----------------------");
+                                    trace_command_buffer(ref line_count);
+                                }
                             }
                             else if (error_type == 0x41)  // Command is not executable
                             {
                                 if (dispatched_cmd is pan_tilt_absolute_command && last_successful_pan_tilt_cmd is pan_tilt_stop_jog_command)
                                 {
+                                    command temp = dispatched_cmd;
+
                                     // Here we re-insert the command if its an absolute command following a stop-jog command.  This is because the camera is not done "stopping" when it says it is.  Therefore we re-insert this command in this special case.
                                     bool any_found = false;
                                     for (int i = 0; i < command_buffer.Count; ++i)
@@ -1818,15 +2138,28 @@ namespace visca
 
                                     if (!any_found)
                                     {
-                                        Trace.WriteLine(DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " Rebuffering command: " + dispatched_cmd.ToString());
                                         command_buffer.Insert(0, dispatched_cmd);
                                     }
 
                                     dispatched_cmd = null;
                                     serial_channel_open.Set();  // Signal the dispatch thread that the serial channel is open
+
+                                    // Trace the command buffer
+                                    if (!any_found)
+                                    {
+                                        lock (log)
+                                        {
+                                            int line_count = 1;
+                                            log.TraceEvent(TraceEventType.Information, 1, DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " Rebuffering command: " + temp.ToString());
+                                            log.TraceEvent(TraceEventType.Information, line_count++, "-----------------------");
+                                            trace_command_buffer(ref line_count);
+                                        }
+                                    }
                                 }
                                 else if (dispatched_cmd is zoom_absolute_command && last_successful_zoom_cmd is zoom_stop_jog_command)
                                 {
+                                    command temp = dispatched_cmd;
+
                                     // Here we re-insert the command if its an absolute command following a stop-jog command.  This is because the camera is not done "stopping" when it says it is.  Therefore we re-insert this command in this special case.
                                     bool any_found = false;
                                     for (int i = 0; i < command_buffer.Count; ++i)
@@ -1836,19 +2169,37 @@ namespace visca
 
                                     if (!any_found)
                                     {
-                                        Trace.WriteLine(DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " Rebuffering command: " + dispatched_cmd.ToString());
                                         command_buffer.Insert(0, dispatched_cmd);
                                     }
 
                                     dispatched_cmd = null;
                                     serial_channel_open.Set();  // Signal the dispatch thread that the serial channel is open
+
+                                    // Trace the command buffer
+                                    if (!any_found)
+                                    {
+                                        lock (log)
+                                        {
+                                            int line_count = 1;
+                                            log.TraceEvent(TraceEventType.Information, 1, DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " Rebuffering command: " + temp.ToString());
+                                            log.TraceEvent(TraceEventType.Information, line_count++, "-----------------------");
+                                            trace_command_buffer(ref line_count);
+                                        }
+                                    }
                                 }
                                 else
                                 {
                                     failed_command = dispatched_cmd;
                                     dispatched_cmd = null;
 
-                                    Trace.WriteLine(DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " Command error (command not executable error): " + failed_command.ToString());
+                                    // Trace the command buffer
+                                    lock (log)
+                                    {
+                                        int line_count = 1;
+                                        log.TraceEvent(TraceEventType.Error, line_count++, DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " Command error (command not executable error): " + failed_command.ToString());
+                                        log.TraceEvent(TraceEventType.Information, line_count++, "-----------------------");
+                                        trace_command_buffer(ref line_count);
+                                    }
                                     if (command_error != null) command_error(this, EventArgs.Empty);  // Inform the "user" that an error happened
                                 }
                             }
@@ -1857,12 +2208,12 @@ namespace visca
                 }
                 catch (InvalidOperationException)  // Serial port wasn't open
                 {
-                    Trace.WriteLine(DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " Serial port error (port not open)");
+                    log.TraceEvent(TraceEventType.Error, 1, DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " Serial port error (port not open)");
                     if (serial_port_error != null) serial_port_error(this, EventArgs.Empty);
                 }
             }
 
-            Trace.WriteLine(DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " Receive thread terminated");  // Thread terminated
+            log.TraceEvent(TraceEventType.Information, 1, DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " Receive thread terminated");  // Thread terminated
         }
         private Thread receive_thread { get; set; }
 
@@ -1870,6 +2221,12 @@ namespace visca
 
         public visca_camera()
         {
+            // Setup for tracers
+            log = new TraceSource("Visca Log");
+            log.Switch.Level = SourceLevels.All;
+            position_log = new TraceSource("Visca Position Log");
+            position_log.Switch.Level = SourceLevels.All;
+
             // Default maximum and minimum angles/ratios
             _maximum_pan_angle = hardware_maximum_pan_angle;
             _minimum_pan_angle = hardware_minimum_pan_angle;
@@ -1964,6 +2321,10 @@ namespace visca
 
         public EVI_D70() : base()
         {
+            log = new TraceSource("EVI_D70 Log");
+            log.Switch.Level = SourceLevels.All;
+            position_log = new TraceSource("ECI_D70 Position Log");
+            position_log.Switch.Level = SourceLevels.All;
         }
 
         /*
