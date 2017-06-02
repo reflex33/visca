@@ -171,8 +171,1103 @@ namespace visca
         public const Byte PT_POSITION_INQ = 0x12;
         public const Byte PT_DATASCREEN_INQ = 0x06;
     }
+    public enum ZOOM_DIRECTION
+    {
+        IN = 0,
+        OUT = 1,
+        NONE = 2
+    }
+    internal enum DRIVE_STATUS
+    {
+        FULL_STOP = 0,
+        JOG = 1,
+        STOP_JOG = 2,
+        ABSOLUTE = 3,
+        STOP_ABSOLUTE = 4
+    }
+    
+    // Angular and zoom positions abstract classes
+    public class angular_position
+    {
+        private double _degrees_per_encoder_count = 0;
+        private short _encoder_count = 0;
 
-    public class visca_camera : IDisposable
+        public short encoder_count
+        {
+            get { return _encoder_count; }
+            internal set
+            {
+                _encoder_count = value;
+                if (position_changed != null) position_changed(this, EventArgs.Empty);  // Event triggered for data changed
+            }
+        }
+        public double radians
+        {
+            get { return _encoder_count * _degrees_per_encoder_count * (Math.PI / 180.0); }
+            internal set
+            {
+                _encoder_count = (short)Math.Round(value * (180.0 / Math.PI) / _degrees_per_encoder_count);  // Convert to encoder counts
+                if (position_changed != null) position_changed(this, EventArgs.Empty);  // Event triggered for data changed
+            }
+        }
+        public double degrees
+        {
+            get { return radians * (180.0 / Math.PI); }
+            internal set
+            {
+                _encoder_count = (short)Math.Round(value / _degrees_per_encoder_count);  // Convert to encoder counts
+                if (position_changed != null) position_changed(this, EventArgs.Empty);  // Event triggered for data changed
+            }
+        }
+
+        public angular_position() { }
+        public angular_position(double degrees_per_encoder_count)
+        {
+            _degrees_per_encoder_count = degrees_per_encoder_count;
+        }
+        public angular_position(angular_position rhs)
+        {
+            _encoder_count = rhs._encoder_count;
+            _degrees_per_encoder_count = rhs._degrees_per_encoder_count;
+        }
+        public override bool Equals(object obj)
+        {
+            if (obj == null)
+                return false;
+
+            // Check if types match, ensures symmetry
+            if (typeof(angular_position) != obj.GetType())
+                return false;
+
+            /// If the object cannot be cast as a angular_position, return false.  Note: this should never happen
+            angular_position pos = obj as angular_position;
+            if (pos == null)
+                return false;
+
+            return (_encoder_count == pos._encoder_count && _degrees_per_encoder_count == pos._degrees_per_encoder_count);
+        }
+        public override int GetHashCode()
+        {
+            return _encoder_count.GetHashCode();
+        }
+
+        public event EventHandler<EventArgs> position_changed;
+    }
+    abstract public class zoom_position
+    {
+        private Tuple<double, short>[] _zoom_values = new Tuple<double, short>[1] { Tuple.Create(0.0, (short) 0) };
+        private short _encoder_count = 0;
+
+        public short encoder_count
+        {
+            get { return _encoder_count; }
+            internal set
+            {
+                for (int i = 0; i < _zoom_values.Length; ++i)
+                    if (value >= _zoom_values[i].Item2 && value <= _zoom_values[i + 1].Item2)
+                    {
+                        _encoder_count = value;
+                        if (position_changed != null) position_changed(this, EventArgs.Empty);  // Event triggered for data changed
+                        return;
+                    }
+                
+                throw new ArgumentOutOfRangeException("Zoom encoder count outside expected range");
+            }
+        }
+        public double ratio
+        {
+            get
+            {
+                for (int i = 0; i < _zoom_values.Length; ++i)
+                    if (_encoder_count >= _zoom_values[i].Item2 && _encoder_count <= _zoom_values[i + 1].Item2)
+                        return ((_zoom_values[i + 1].Item1 - _zoom_values[i].Item1) / (_zoom_values[i + 1].Item2 - _zoom_values[i].Item2)) * (_encoder_count - _zoom_values[i].Item2) + _zoom_values[i].Item1;
+
+                return 0;  // Should we throw an exception here instead?
+            }
+            internal set
+            {
+                for (int i = 0; i < _zoom_values.Length; ++i)
+                    if (value >= _zoom_values[i].Item1 && value <= _zoom_values[i + 1].Item1)
+                    {
+                        _encoder_count = (short)Math.Round(((_zoom_values[i + 1].Item2 - _zoom_values[i].Item2) / (_zoom_values[i + 1].Item1 - _zoom_values[i].Item1)) * (value - _zoom_values[i].Item1) + _zoom_values[i].Item2);
+                        if (position_changed != null) position_changed(this, EventArgs.Empty);  // Event triggered for data changed
+                        return;
+                    }
+
+                throw new ArgumentOutOfRangeException("Zoom ratio outside expected range");
+            }
+        }
+
+        public zoom_position() { }
+        public zoom_position(Tuple<double, short>[] zoom_values)
+        {
+            _zoom_values = zoom_values;
+        }
+        public zoom_position(zoom_position rhs)
+        {
+            _encoder_count = rhs._encoder_count;
+            _zoom_values = rhs._zoom_values;
+        }
+        public override bool Equals(object obj)
+        {
+            if (obj == null)
+                return false;
+
+            // Check if types match, ensures symmetry
+            if (typeof(zoom_position) != obj.GetType())
+                return false;
+
+            /// If the object cannot be cast as a zoom_position, return false.  Note: this should never happen
+            zoom_position pos = obj as zoom_position;
+            if (pos == null)
+                return false;
+
+            return _encoder_count == pos._encoder_count;  // Should also check that the zoom values are equal here, but not sure how to check that the entire array is equal in a concise way.  Come back to this later.
+        }
+        public override int GetHashCode()
+        {
+            return _encoder_count.GetHashCode();
+        }
+
+        public event EventHandler<EventArgs> position_changed;
+
+        public static zoom_position create_from_encoder_count(short e)
+        {
+            zoom_position p = new zoom_position();
+            p.encoder_count = e;
+            return p;
+        }
+        public static zoom_position create_from_ratio(double r)
+        {
+            zoom_position p = new zoom_position();
+            p.ratio = r;
+            return p;
+        }
+    }
+
+    // Camera commands
+    internal class command
+    {
+        private visca_camera _command_limit_check_camera;
+        public visca_camera command_limit_check_camera
+        {
+            get { return _command_limit_check_camera; }
+            set
+            {
+                if (value == null)
+                    throw new ArgumentException("Camera for limit checking must not be NULL!");
+
+                command_limit_check_camera = value;
+            }
+        }
+        private int _command_camera_num;
+        public int command_camera_num
+        {
+            get { return _command_camera_num; }
+            set
+            {
+                if (value < 0 || value > 8)
+                    throw new System.ArgumentException("Invalid camera number");
+                else
+                    _command_camera_num = value;
+            }
+        }
+        public virtual Byte[] raw_serial_data
+        {
+            get { return null; }
+        }
+
+        public command(int camera_number, visca_camera limit_check_camera)
+        {
+            command_camera_num = camera_number;
+            command_limit_check_camera = limit_check_camera;
+        }
+        public command(command rhs)
+        {
+            command_camera_num = rhs.command_camera_num;
+            _command_limit_check_camera = rhs._command_limit_check_camera;
+        }
+        public override bool Equals(object obj)
+        {
+            if (obj == null)
+                return false;
+
+            // Check if types match, ensures symmetry
+            if (typeof(command) != obj.GetType())
+                return false;
+
+            // If the object cannot be cast as a command, return false.  Note: this should never happen
+            command cmd = obj as command;
+            if (cmd == null)
+                return false;
+
+            return ((command_camera_num == cmd.command_camera_num) && (_command_limit_check_camera.Equals(cmd._command_limit_check_camera)));
+        }
+        public override int GetHashCode()
+        {
+            return ToStringDetail().GetHashCode();
+        }
+        public void deep_clone(command rhs)
+        {
+            command_camera_num = rhs.command_camera_num;
+            _command_limit_check_camera = rhs.command_limit_check_camera;
+        }
+        public override string ToString()
+        {
+            return "GENERIC COMMAND";
+        }
+        public virtual string ToStringDetail()
+        {
+            return ToString() + " " + "CameraNumber:" + command_camera_num;
+        }
+    }
+    internal class connect_command  // This does not inherent from command because it doesn't need camera number
+    {
+        public Byte[] raw_serial_data
+        {
+            get
+            {
+                Byte[] serial_data = new Byte[4];
+                serial_data[0] = VISCA_CODE.HEADER;
+                serial_data[0] |= (1 << 3);
+                serial_data[0] &= 0xF8;
+                serial_data[1] = 0x30;
+                serial_data[2] = 0x01;
+                serial_data[3] = 0xFF;
+
+                return serial_data;
+            }
+        }
+
+        public connect_command() { }
+        public connect_command(connect_command rhs) { }
+        public override string ToString()
+        {
+            return "CONNECT COMMAND";
+        }
+    }
+    internal class IF_CLEAR_command : command
+    {
+        public override Byte[] raw_serial_data
+        {
+            get
+            {
+                Byte[] serial_data = new Byte[5];
+                serial_data[0] = VISCA_CODE.HEADER;
+                serial_data[0] |= (Byte)command_camera_num;
+                serial_data[1] = VISCA_CODE.COMMAND;
+                serial_data[2] = 0x00;
+                serial_data[3] = 0x01;
+                serial_data[4] = VISCA_CODE.TERMINATOR;
+
+                return serial_data;
+            }
+        }
+
+        public IF_CLEAR_command(int camera_number, visca_camera limit_check_camera) : base(camera_number, limit_check_camera) { }
+        public IF_CLEAR_command(IF_CLEAR_command rhs) : base(rhs) { }
+        public override bool Equals(object obj)
+        {
+            if (obj == null)
+                return false;
+
+            // Check if types match, ensures symmetry
+            if (typeof(IF_CLEAR_command) != obj.GetType())
+                return false;
+
+            /// If the object cannot be cast as a IF_CLEAR_command, return false.  Note: this should never happen
+            IF_CLEAR_command cmd = obj as IF_CLEAR_command;
+            if (cmd == null)
+                return false;
+
+            return base.Equals(new command(cmd));
+        }
+        public override string ToString()
+        {
+            return "EMERGENCY STOP";
+        }
+        public override string ToStringDetail()
+        {
+            return base.ToStringDetail();
+        }
+    }
+    internal class pan_tilt_jog_command : command
+    {
+        private double _direction_rad;
+        public double direction_rad
+        {
+            get { return _direction_rad; }
+            set
+            {
+                if (value > Math.PI || value < -Math.PI)  // Invalid direction?
+                    throw new System.ArgumentException("Invalid direction for jog of pan/tilt drive");
+                else
+                    _direction_rad = value;
+            }
+        }
+        public double direction_deg
+        {
+            get { return direction_rad * (180.0 / Math.PI); }
+            set { direction_rad = value * (Math.PI / 180.0); }
+        }
+        private int _pan_tilt_speed;
+        public int pan_tilt_speed
+        {
+            get { return _pan_tilt_speed; }
+            set
+            {
+                if (value >= command_limit_check_camera.hardware_minimum_pan_tilt_speed && value <= command_limit_check_camera.hardware_maximum_pan_tilt_speed)
+                    _pan_tilt_speed = value;
+                else
+                    throw new System.ArgumentException("Invalid speed for pan/tilt drive");
+            }
+        }
+        public int pan_speed
+        {
+            get
+            {
+                // Find percentage of maximum to move in direction
+                double left_right = Math.Cos(direction_rad);
+
+                return (int)Math.Round(left_right * pan_tilt_speed);
+            }
+            set
+            {
+                try
+                {
+                    double new_direction = Math.Atan2(tilt_speed, value);
+                    int new_pan_tilt_speed = (int)Math.Round(Math.Sqrt(Math.Pow(value, 2) + Math.Pow(tilt_speed, 2)));
+                    pan_tilt_speed = new_pan_tilt_speed;
+                    direction_rad = new_direction;
+                }
+                catch
+                {
+                    throw new System.ArgumentException("Invalid speed for pan/tilt drive");
+                }
+            }
+        }
+        public int tilt_speed
+        {
+            get
+            {
+                // Find percentage of maximum to move in direction
+                double up_down = Math.Sin(direction_rad);
+
+                return (int)Math.Round(up_down * pan_tilt_speed);
+            }
+            set
+            {
+                try
+                {
+                    double new_direction = Math.Atan2(value, pan_speed);
+                    int new_pan_tilt_speed = (int)Math.Round(Math.Sqrt(Math.Pow(pan_speed, 2) + Math.Pow(value, 2)));
+                    pan_tilt_speed = new_pan_tilt_speed;
+                    direction_rad = new_direction;
+                }
+                catch
+                {
+                    throw new System.ArgumentException("Invalid speed for pan/tilt drive");
+                }
+            }
+        }
+        public override Byte[] raw_serial_data
+        {
+            get
+            {
+                // Check to ensure that speed isn't out of limits.  This could happen if the camera changed since this command was created.
+                if (_pan_tilt_speed < command_limit_check_camera.hardware_minimum_pan_tilt_speed || _pan_tilt_speed > command_limit_check_camera.hardware_maximum_pan_tilt_speed)
+                    throw new System.ArgumentException("Pan/Tilt Jog command outside speed limits!");
+
+                Byte[] serial_data = new Byte[9];
+                serial_data[0] = VISCA_CODE.HEADER;
+                serial_data[0] |= (Byte)command_camera_num;
+                serial_data[1] = VISCA_CODE.COMMAND;
+                serial_data[2] = VISCA_CODE.CATEGORY_PAN_TILTER;
+                serial_data[3] = VISCA_CODE.PT_DRIVE;
+                serial_data[4] = (byte)(Math.Abs(pan_speed));
+                serial_data[5] = (byte)(Math.Abs(tilt_speed));
+                if (pan_speed > 0)
+                    serial_data[6] = VISCA_CODE.PT_DRIVE_HORIZ_RIGHT;
+                else if (pan_speed < 0)
+                    serial_data[6] = VISCA_CODE.PT_DRIVE_HORIZ_LEFT;
+                else  // pan_speed == 0
+                    serial_data[6] = VISCA_CODE.PT_DRIVE_HORIZ_STOP;  // Note: this is needed because speed of 0 still moves the camera for some reason
+                if (tilt_speed > 0)
+                    serial_data[7] = VISCA_CODE.PT_DRIVE_VERT_UP;
+                else if (tilt_speed < 0)
+                    serial_data[7] = VISCA_CODE.PT_DRIVE_VERT_DOWN;
+                else  // tilt_speed == 0
+                    serial_data[7] = VISCA_CODE.PT_DRIVE_VERT_STOP;  // Note: this is needed because speed of 0 still moves the camera for some reason
+                serial_data[8] = VISCA_CODE.TERMINATOR;
+
+                return serial_data;
+            }
+        }
+
+        public pan_tilt_jog_command(int camera_number, visca_camera limit_check_camera, int speed = 6, double direction_in_degrees = 0)
+            : base(camera_number, limit_check_camera)
+        {
+            pan_tilt_speed = speed;
+            direction_deg = direction_in_degrees;
+        }
+        public pan_tilt_jog_command(pan_tilt_jog_command rhs)
+            : base(rhs)
+        {
+            direction_rad = rhs.direction_rad;
+            pan_tilt_speed = rhs.pan_tilt_speed;
+        }
+        public override bool Equals(object obj)
+        {
+            if (obj == null)
+                return false;
+
+            // Check if types match, ensures symmetry
+            if (typeof(pan_tilt_jog_command) != obj.GetType())
+                return false;
+
+            /// If the object cannot be cast as a pan_tilt_jog_command, return false.  Note: this should never happen
+            pan_tilt_jog_command cmd = obj as pan_tilt_jog_command;
+            if (cmd == null)
+                return false;
+
+            return base.Equals(new command(cmd)) && direction_rad == cmd.direction_rad && pan_tilt_speed == cmd.pan_tilt_speed;
+        }
+        public void deep_clone(pan_tilt_jog_command rhs)
+        {
+            base.deep_clone(rhs);
+            direction_rad = rhs.direction_rad;
+            pan_tilt_speed = rhs.pan_tilt_speed;
+        }
+        public override string ToString()
+        {
+            return "PAN/TILT JOG";
+        }
+        public override string ToStringDetail()
+        {
+            return base.ToStringDetail() + " " + "Direction(degrees):" + direction_deg + " " + "Pan/TiltSpeed:" + pan_tilt_speed;
+        }
+    }
+    internal class pan_tilt_stop_jog_command : command
+    {
+        public override Byte[] raw_serial_data
+        {
+            get
+            {
+                Byte[] serial_data = new Byte[9];
+                serial_data[0] = VISCA_CODE.HEADER;
+                serial_data[0] |= (Byte)command_camera_num;
+                serial_data[1] = VISCA_CODE.COMMAND;
+                serial_data[2] = VISCA_CODE.CATEGORY_PAN_TILTER;
+                serial_data[3] = VISCA_CODE.PT_DRIVE;
+                serial_data[4] = (byte)2;  // This value doesn't matter
+                serial_data[5] = (byte)2;  // This value doesn't matter
+                serial_data[6] = VISCA_CODE.PT_DRIVE_HORIZ_STOP;
+                serial_data[7] = VISCA_CODE.PT_DRIVE_VERT_STOP;
+                serial_data[8] = VISCA_CODE.TERMINATOR;
+
+                return serial_data;
+            }
+        }
+
+        public pan_tilt_stop_jog_command(int camera_number, visca_camera limit_check_camera) : base(camera_number, limit_check_camera) { }
+        public pan_tilt_stop_jog_command(pan_tilt_stop_jog_command rhs) : base(rhs) { }
+        public override bool Equals(object obj)
+        {
+            if (obj == null)
+                return false;
+
+            // Check if types match, ensures symmetry
+            if (typeof(pan_tilt_stop_jog_command) != obj.GetType())
+                return false;
+
+            /// If the object cannot be cast as a pan_tilt_stop_jog_command, return false.  Note: this should never happen
+            pan_tilt_stop_jog_command cmd = obj as pan_tilt_stop_jog_command;
+            if (cmd == null)
+                return false;
+
+            return base.Equals(new command(cmd));
+        }
+        public override string ToString()
+        {
+            return "PAN/TILT STOP JOG";
+        }
+        public override string ToStringDetail()
+        {
+            return base.ToStringDetail();
+        }
+    }
+    internal class pan_tilt_absolute_command : command
+    {
+        private angular_position _pan_pos;
+        public angular_position pan_pos
+        {
+            get { return _pan_pos; }
+            set
+            {
+                if (value.encoder_count >= command_limit_check_camera.minimum_pan_angle.encoder_count && value.encoder_count <= command_limit_check_camera.maximum_pan_angle.encoder_count)
+                    _pan_pos = new angular_position(value);
+                else
+                    throw new System.ArgumentException("Invalid angle for pan drive");
+            }
+        }
+        private angular_position _tilt_pos;
+        public angular_position tilt_pos
+        {
+            get { return _tilt_pos; }
+            set
+            {
+                if (value.encoder_count >= command_limit_check_camera.minimum_tilt_angle.encoder_count && value.encoder_count <= command_limit_check_camera.maximum_tilt_angle.encoder_count)
+                    _tilt_pos = new angular_position(value);
+                else
+                    throw new System.ArgumentException("Invalid angle for tilt drive");
+            }
+        }
+        private int _pan_tilt_speed;
+        public int pan_tilt_speed
+        {
+            get { return _pan_tilt_speed; }
+            set
+            {
+                if (value >= command_limit_check_camera.hardware_minimum_pan_tilt_speed && value <= command_limit_check_camera.hardware_maximum_pan_tilt_speed)
+                    _pan_tilt_speed = value;
+                else
+                    throw new System.ArgumentException("Invalid speed for pan/tilt drive");
+            }
+        }
+        public override Byte[] raw_serial_data
+        {
+            get
+            {
+                // Check to ensure that speed, pan position, and tilt position aren't out of limits.  This could happen if the camera changed since this command was created.
+                if (_pan_tilt_speed < command_limit_check_camera.hardware_minimum_pan_tilt_speed || _pan_tilt_speed > command_limit_check_camera.hardware_maximum_pan_tilt_speed ||
+                     pan_pos.encoder_count < command_limit_check_camera.minimum_pan_angle.encoder_count || pan_pos.encoder_count > command_limit_check_camera.maximum_pan_angle.encoder_count ||
+                     tilt_pos.encoder_count < command_limit_check_camera.minimum_tilt_angle.encoder_count || tilt_pos.encoder_count > command_limit_check_camera.maximum_tilt_angle.encoder_count)
+                    throw new System.ArgumentException("Pan/Tilt Absolute command outside limits!");
+
+                Byte[] serial_data = new Byte[15];
+                serial_data[0] = VISCA_CODE.HEADER;
+                serial_data[0] |= (Byte)command_camera_num;
+                serial_data[1] = VISCA_CODE.COMMAND;
+                serial_data[2] = VISCA_CODE.CATEGORY_PAN_TILTER;
+                serial_data[3] = VISCA_CODE.PT_ABSOLUTE_POSITION;
+                serial_data[4] = (byte)pan_tilt_speed;
+                serial_data[5] = (byte)pan_tilt_speed;
+                serial_data[6] = (byte)((pan_pos.encoder_count & 0xF000) >> 12);
+                serial_data[7] = (byte)((pan_pos.encoder_count & 0x0F00) >> 8);
+                serial_data[8] = (byte)((pan_pos.encoder_count & 0x00F0) >> 4);
+                serial_data[9] = (byte)(pan_pos.encoder_count & 0x000F);
+                serial_data[10] = (byte)((tilt_pos.encoder_count & 0xF000) >> 12);
+                serial_data[11] = (byte)((tilt_pos.encoder_count & 0x0F00) >> 8);
+                serial_data[12] = (byte)((tilt_pos.encoder_count & 0x00F0) >> 4);
+                serial_data[13] = (byte)(tilt_pos.encoder_count & 0x000F);
+                serial_data[14] = VISCA_CODE.TERMINATOR;
+
+                return serial_data;
+            }
+        }
+
+        public pan_tilt_absolute_command(int camera_number, visca_camera limit_check_camera, int speed = 6, angular_position pan_position = null, angular_position tilt_position = null)
+            : base(camera_number, limit_check_camera)
+        {
+            pan_tilt_speed = speed;
+            if (pan_position == null)
+                pan_pos = new angular_position();
+            else
+                pan_pos = new angular_position(pan_position);
+            if (tilt_position == null)
+                tilt_pos = new angular_position();
+            else
+                tilt_pos = new angular_position(tilt_position);
+        }
+        public pan_tilt_absolute_command(pan_tilt_absolute_command rhs)
+            : base(rhs)
+        {
+            pan_tilt_speed = rhs.pan_tilt_speed;
+            pan_pos = new angular_position(rhs.pan_pos);
+            tilt_pos = new angular_position(rhs.tilt_pos);
+        }
+        public override bool Equals(object obj)
+        {
+            if (obj == null)
+                return false;
+
+            // Check if types match, ensures symmetry
+            if (typeof(pan_tilt_absolute_command) != obj.GetType())
+                return false;
+
+            /// If the object cannot be cast as a pan_tilt_absolute_command, return false.  Note: this should never happen
+            pan_tilt_absolute_command cmd = obj as pan_tilt_absolute_command;
+            if (cmd == null)
+                return false;
+
+            return base.Equals(new command(cmd)) && pan_pos.Equals(cmd.pan_pos) && tilt_pos.Equals(cmd.tilt_pos) && pan_tilt_speed == cmd.pan_tilt_speed;
+        }
+        public void deep_clone(pan_tilt_absolute_command rhs)
+        {
+            base.deep_clone(rhs);
+            pan_tilt_speed = rhs.pan_tilt_speed;
+            pan_pos = new angular_position(rhs.pan_pos);
+            tilt_pos = new angular_position(rhs.tilt_pos);
+        }
+        public override string ToString()
+        {
+            return "PAN/TILT ABSOLUTE";
+        }
+        public override string ToStringDetail()
+        {
+            return base.ToStringDetail() + " " + "PanPosition(degrees):" + pan_pos.degrees + " " + "TiltPosition(degrees):" + tilt_pos.degrees + " " + "Pan/TiltSpeed:" + pan_tilt_speed;
+        }
+    }
+    internal class pan_tilt_cancel_command : command
+    {
+        private int _socket_num;
+        public int socket_num
+        {
+            get { return _socket_num; }
+            set
+            {
+                if (value != 1 && value != 2)
+                    throw new System.ArgumentException("Invalid socket number");
+                else
+                    _socket_num = value;
+            }
+        }
+        public override Byte[] raw_serial_data
+        {
+            get
+            {
+                Byte[] serial_data = new Byte[3];
+                serial_data[0] = VISCA_CODE.HEADER;
+                serial_data[0] |= (Byte)command_camera_num;
+                serial_data[1] = 0x20;
+                serial_data[1] |= (Byte)socket_num;
+                serial_data[2] = VISCA_CODE.TERMINATOR;
+
+                return serial_data;
+            }
+        }
+
+        public pan_tilt_cancel_command(int camera_number, visca_camera limit_check_camera, int socket_number)
+            : base(camera_number, limit_check_camera)
+        {
+            socket_num = socket_number;
+        }
+        public pan_tilt_cancel_command(pan_tilt_cancel_command rhs)
+            : base(rhs)
+        {
+            socket_num = rhs.socket_num;
+        }
+        public override bool Equals(object obj)
+        {
+            if (obj == null)
+                return false;
+
+            // Check if types match, ensures symmetry
+            if (typeof(pan_tilt_cancel_command) != obj.GetType())
+                return false;
+
+            /// If the object cannot be cast as a pan_tilt_cancel_command, return false.  Note: this should never happen
+            pan_tilt_cancel_command cmd = obj as pan_tilt_cancel_command;
+            if (cmd == null)
+                return false;
+
+            return base.Equals(new command(cmd)) && socket_num == cmd.socket_num;
+        }
+        public void deep_clone(pan_tilt_cancel_command rhs)
+        {
+            base.deep_clone(rhs);
+            socket_num = rhs.socket_num;
+        }
+        public override string ToString()
+        {
+            return "PAN/TILT STOP ABSOLUTE";
+        }
+        public override string ToStringDetail()
+        {
+            return base.ToStringDetail() + " " + "SocketNumber:" + socket_num;
+        }
+    }
+    internal class pan_tilt_inquiry_command : command
+    {
+        public override Byte[] raw_serial_data
+        {
+            get
+            {
+                Byte[] serial_data = new Byte[5];
+                serial_data[0] = VISCA_CODE.HEADER;
+                serial_data[0] |= (Byte)command_camera_num;
+                serial_data[1] = VISCA_CODE.INQUIRY;
+                serial_data[2] = VISCA_CODE.CATEGORY_PAN_TILTER;
+                serial_data[3] = VISCA_CODE.PT_POSITION_INQ;
+                serial_data[4] = VISCA_CODE.TERMINATOR;
+
+                return serial_data;
+            }
+        }
+
+        public pan_tilt_inquiry_command(int camera_number, visca_camera limit_check_camera) : base(camera_number, limit_check_camera) { }
+        public pan_tilt_inquiry_command(pan_tilt_inquiry_command rhs) : base(rhs) { }
+        public override bool Equals(object obj)
+        {
+            if (obj == null)
+                return false;
+
+            // Check if types match, ensures symmetry
+            if (typeof(pan_tilt_inquiry_command) != obj.GetType())
+                return false;
+
+            /// If the object cannot be cast as a pan_tilt_inquiry_command, return false.  Note: this should never happen
+            pan_tilt_inquiry_command cmd = obj as pan_tilt_inquiry_command;
+            if (cmd == null)
+                return false;
+
+            return base.Equals(new command(cmd));
+        }
+        public override string ToString()
+        {
+            return "PAN/TILT INQUIRY";
+        }
+        public override string ToStringDetail()
+        {
+            return base.ToStringDetail();
+        }
+    }
+    internal class zoom_jog_command : command
+    {
+        public ZOOM_DIRECTION direction { get; set; }
+        private int _zoom_speed;
+        public int zoom_speed
+        {
+            get { return _zoom_speed; }
+            set
+            {
+                if (value >= command_limit_check_camera.hardware_minimum_zoom_speed && value <= command_limit_check_camera.hardware_maximum_zoom_speed)
+                    _zoom_speed = value;
+                else
+                    throw new System.ArgumentException("Invalid speed for zoom drive");
+            }
+        }
+        public override Byte[] raw_serial_data
+        {
+            get
+            {
+                // Check to ensure that speed isn't out of limits.  This could happen if the camera changed since this command was created.
+                if (_zoom_speed < command_limit_check_camera.hardware_minimum_zoom_speed || _zoom_speed > command_limit_check_camera.hardware_maximum_zoom_speed)
+                    throw new System.ArgumentException("Zoom Jog command outside speed limits!");
+
+                // Check if zoom direction is "none".  There is no "zoom" command for none.  Instead a stop command should be sent.
+                if (direction == ZOOM_DIRECTION.NONE)
+                    throw new System.ArgumentException("Zoom Jog command can't have a direction of 'none'!");
+
+                Byte[] serial_data = new Byte[6];
+                serial_data[0] = VISCA_CODE.HEADER;
+                serial_data[0] |= (Byte)command_camera_num;
+                serial_data[1] = VISCA_CODE.COMMAND;
+                serial_data[2] = VISCA_CODE.CATEGORY_CAMERA1;
+                serial_data[3] = VISCA_CODE.ZOOM;
+                if (direction == ZOOM_DIRECTION.IN)
+                    serial_data[4] = (byte)(VISCA_CODE.ZOOM_TELE_SPEED | zoom_speed);
+                else  // if (direction == ZOOM_DIRECTION.OUT)
+                    serial_data[4] = (byte)(VISCA_CODE.ZOOM_WIDE_SPEED | zoom_speed);
+                serial_data[5] = VISCA_CODE.TERMINATOR;
+
+                return serial_data;
+            }
+        }
+
+        public zoom_jog_command(int camera_number, visca_camera limit_check_camera, int speed = 4, ZOOM_DIRECTION d = ZOOM_DIRECTION.OUT)
+            : base(camera_number, limit_check_camera)
+        {
+            zoom_speed = speed;
+            direction = d;
+        }
+        public zoom_jog_command(zoom_jog_command rhs)
+            : base(rhs)
+        {
+            direction = rhs.direction;
+            zoom_speed = rhs.zoom_speed;
+        }
+        public override bool Equals(object obj)
+        {
+            if (obj == null)
+                return false;
+
+            // Check if types match, ensures symmetry
+            if (typeof(zoom_jog_command) != obj.GetType())
+                return false;
+
+            /// If the object cannot be cast as a zoom_jog_command, return false.  Note: this should never happen
+            zoom_jog_command cmd = obj as zoom_jog_command;
+            if (cmd == null)
+                return false;
+
+            return base.Equals(new command(cmd)) && zoom_speed == cmd.zoom_speed && direction == cmd.direction;
+        }
+        public void deep_clone(zoom_jog_command rhs)
+        {
+            base.deep_clone(rhs);
+            direction = rhs.direction;
+            zoom_speed = rhs.zoom_speed;
+        }
+        public override string ToString()
+        {
+            return "ZOOM JOG";
+        }
+        public override string ToStringDetail()
+        {
+            string d;
+            if (direction == ZOOM_DIRECTION.IN)
+                d = "IN";
+            else if (direction == ZOOM_DIRECTION.OUT)
+                d = "OUT";
+            else // if (direction == ZOOM_DIRECTION.NONE)
+                d = "NONE";
+            return base.ToStringDetail() + " " + "ZoomDirection:" + d + " " + "ZoomSpeed:" + zoom_speed;
+        }
+    }
+    internal class zoom_stop_jog_command : command
+    {
+        public override Byte[] raw_serial_data
+        {
+            get
+            {
+                Byte[] serial_data = new Byte[6];
+                serial_data[0] = VISCA_CODE.HEADER;
+                serial_data[0] |= (Byte)command_camera_num;
+                serial_data[1] = VISCA_CODE.COMMAND;
+                serial_data[2] = VISCA_CODE.CATEGORY_CAMERA1;
+                serial_data[3] = VISCA_CODE.ZOOM;
+                serial_data[4] = VISCA_CODE.ZOOM_STOP;
+                serial_data[5] = VISCA_CODE.TERMINATOR;
+
+                return serial_data;
+            }
+        }
+
+        public zoom_stop_jog_command(int camera_number, visca_camera limit_check_camera) : base(camera_number, limit_check_camera) { }
+        public zoom_stop_jog_command(zoom_stop_jog_command rhs) : base(rhs) { }
+        public override bool Equals(object obj)
+        {
+            if (obj == null)
+                return false;
+
+            // Check if types match, ensures symmetry
+            if (typeof(zoom_stop_jog_command) != obj.GetType())
+                return false;
+
+            /// If the object cannot be cast as a zoom_stop_jog_command, return false.  Note: this should never happen
+            zoom_stop_jog_command cmd = obj as zoom_stop_jog_command;
+            if (cmd == null)
+                return false;
+
+            return base.Equals(new command(cmd));
+        }
+        public override string ToString()
+        {
+            return "ZOOM STOP JOG";
+        }
+        public override string ToStringDetail()
+        {
+            return base.ToStringDetail();
+        }
+    }
+    internal class zoom_absolute_command : command
+    {
+        private zoom_position _zoom_pos;
+        public zoom_position zoom_pos
+        {
+            get { return _zoom_pos; }
+            set
+            {
+                if (value.encoder_count >= command_limit_check_camera.minimum_zoom_ratio.encoder_count && value.encoder_count <= command_limit_check_camera.maximum_zoom_ratio.encoder_count)
+                    _zoom_pos = new zoom_position(value);
+                else
+                    throw new System.ArgumentException("Invalid zoom ratio for zoom drive");
+            }
+        }
+        public override Byte[] raw_serial_data
+        {
+            get
+            {
+                // Check to ensure that zoom position isn't out of limits.  This could happen if the camera changed since this command was created.
+                if (zoom_pos.encoder_count < command_limit_check_camera.minimum_zoom_ratio.encoder_count || zoom_pos.encoder_count > command_limit_check_camera.maximum_zoom_ratio.encoder_count)
+                    throw new System.ArgumentException("Zoom Absolute command outside limits!");
+
+                Byte[] serial_data = new Byte[9];
+                serial_data[0] = VISCA_CODE.HEADER;
+                serial_data[0] |= (Byte)command_camera_num;
+                serial_data[1] = VISCA_CODE.COMMAND;
+                serial_data[2] = VISCA_CODE.CATEGORY_CAMERA1;
+                serial_data[3] = VISCA_CODE.ZOOM_VALUE;
+                serial_data[4] = (byte)((zoom_pos.encoder_count & 0xF000) >> 12);
+                serial_data[5] = (byte)((zoom_pos.encoder_count & 0x0F00) >> 8);
+                serial_data[6] = (byte)((zoom_pos.encoder_count & 0x00F0) >> 4);
+                serial_data[7] = (byte)(zoom_pos.encoder_count & 0x000F);
+                serial_data[8] = VISCA_CODE.TERMINATOR;
+
+                return serial_data;
+            }
+        }
+
+        public zoom_absolute_command(int camera_number, visca_camera limit_check_camera, zoom_position z = null)
+            : base(camera_number, limit_check_camera)
+        {
+            if (z == null)
+                zoom_pos = new zoom_position();
+            else
+                zoom_pos = new zoom_position(z);
+        }
+        public zoom_absolute_command(zoom_absolute_command rhs)
+            : base(rhs)
+        {
+            zoom_pos = new zoom_position(rhs.zoom_pos);
+        }
+        public override bool Equals(object obj)
+        {
+            if (obj == null)
+                return false;
+
+            // Check if types match, ensures symmetry
+            if (typeof(zoom_absolute_command) != obj.GetType())
+                return false;
+
+            /// If the object cannot be cast as a pan_tilt_absolute_command, return false.  Note: this should never happen
+            zoom_absolute_command cmd = obj as zoom_absolute_command;
+            if (cmd == null)
+                return false;
+
+            return base.Equals(new command(cmd)) && zoom_pos.Equals(cmd.zoom_pos);
+        }
+        public void deep_clone(zoom_absolute_command rhs)
+        {
+            base.deep_clone(rhs);
+            zoom_pos = new zoom_position(rhs.zoom_pos);
+        }
+        public override string ToString()
+        {
+            return "ZOOM ABSOLUTE";
+        }
+        public override string ToStringDetail()
+        {
+            return base.ToStringDetail() + " " + "ZoomPosition(ratio):" + zoom_pos.ratio;
+        }
+    }
+    internal class zoom_cancel_command : command
+    {
+        private int _socket_num;
+        public int socket_num
+        {
+            get { return _socket_num; }
+            set
+            {
+                if (value != 1 && value != 2)
+                    throw new System.ArgumentException("Invalid socket number");
+                else
+                    _socket_num = value;
+            }
+        }
+        public override Byte[] raw_serial_data
+        {
+            get
+            {
+                Byte[] serial_data = new Byte[3];
+                serial_data[0] = VISCA_CODE.HEADER;
+                serial_data[0] |= (Byte)command_camera_num;
+                serial_data[1] = 0x20;
+                serial_data[1] |= (Byte)socket_num;
+                serial_data[2] = VISCA_CODE.TERMINATOR;
+
+                return serial_data;
+            }
+        }
+
+        public zoom_cancel_command(int camera_number, visca_camera limit_check_camera, int socket_number)
+            : base(camera_number, limit_check_camera)
+        {
+            socket_num = socket_number;
+        }
+        public zoom_cancel_command(zoom_cancel_command rhs)
+            : base(rhs)
+        {
+            socket_num = rhs.socket_num;
+        }
+        public override bool Equals(object obj)
+        {
+            if (obj == null)
+                return false;
+
+            // Check if types match, ensures symmetry
+            if (typeof(zoom_cancel_command) != obj.GetType())
+                return false;
+
+            /// If the object cannot be cast as a zoom_cancel_command, return false.  Note: this should never happen
+            zoom_cancel_command cmd = obj as zoom_cancel_command;
+            if (cmd == null)
+                return false;
+
+            return base.Equals(new command(cmd)) && socket_num == cmd.socket_num;
+        }
+        public void deep_clone(zoom_cancel_command rhs)
+        {
+            base.deep_clone(rhs);
+            socket_num = rhs.socket_num;
+        }
+        public override string ToString()
+        {
+            return "ZOOM STOP ABSOLUTE";
+        }
+        public override string ToStringDetail()
+        {
+            return base.ToStringDetail() + " " + "SocketNumber:" + socket_num;
+        }
+    }
+    internal class zoom_inquiry_command : command
+    {
+        public override Byte[] raw_serial_data
+        {
+            get
+            {
+                Byte[] serial_data = new Byte[5];
+                serial_data[0] = VISCA_CODE.HEADER;
+                serial_data[0] |= (Byte)command_camera_num;
+                serial_data[1] = VISCA_CODE.INQUIRY;
+                serial_data[2] = VISCA_CODE.CATEGORY_CAMERA1;
+                serial_data[3] = VISCA_CODE.ZOOM_VALUE;
+                serial_data[4] = VISCA_CODE.TERMINATOR;
+
+                return serial_data;
+            }
+        }
+
+        public zoom_inquiry_command(int camera_number, visca_camera limit_check_camera) : base(camera_number, limit_check_camera) { }
+        public zoom_inquiry_command(zoom_inquiry_command rhs) : base(rhs) { }
+        public override bool Equals(object obj)
+        {
+            if (obj == null)
+                return false;
+
+            // Check if types match, ensures symmetry
+            if (typeof(zoom_inquiry_command) != obj.GetType())
+                return false;
+
+            /// If the object cannot be cast as a zoom_inquiry_command, return false.  Note: this should never happen
+            zoom_inquiry_command cmd = obj as zoom_inquiry_command;
+            if (cmd == null)
+                return false;
+
+            return base.Equals(new command(cmd));
+        }
+        public override string ToString()
+        {
+            return "ZOOM INQUIRY";
+        }
+        public override string ToStringDetail()
+        {
+            return base.ToStringDetail();
+        }
+    }
+
+    abstract public class visca_camera : IDisposable
     {
         public class ResultOutOfRange : Exception
         {
@@ -185,232 +1280,17 @@ namespace visca
                 : base(info, context) { }
         }
 
-        public enum ZOOM_DIRECTION
-        {
-            IN = 0,
-            OUT = 1,
-            NONE = 2
-        }
-        private enum DRIVE_STATUS
-        {
-            FULL_STOP = 0,
-            JOG = 1,
-            STOP_JOG = 2,
-            ABSOLUTE = 3,
-            STOP_ABSOLUTE = 4
-        }
-
-        public class angular_position
-        {
-            private short _encoder_count = 0;
-            private double _radians = 0;
-
-            public short encoder_count
-            {
-                get { return _encoder_count; }
-                internal set
-                {
-                    _encoder_count = value;
-                    _radians = value * 0.075 * (Math.PI / 180.0);
-                    if (position_changed != null) position_changed(this, EventArgs.Empty);  // Event triggered for data changed
-                }
-            }
-            public double radians
-            {
-                get { return _radians; }
-                internal set
-                {
-                    _radians = value;
-                    _encoder_count = (short)Math.Round(value * (180.0 / Math.PI) / 0.075);  // Convert to encoder counts
-                    if (position_changed != null) position_changed(this, EventArgs.Empty);  // Event triggered for data changed
-                }
-            }
-            public double degrees
-            {
-                get { return _radians * (180.0 / Math.PI); }
-                internal set
-                {
-                    _radians = value * (Math.PI / 180.0);
-                    _encoder_count = (short)Math.Round(value / 0.075);  // Convert to encoder counts
-                    if (position_changed != null) position_changed(this, EventArgs.Empty);  // Event triggered for data changed
-                }
-            }
-
-            public angular_position() { }
-            public angular_position(angular_position rhs)
-            {
-                encoder_count = rhs.encoder_count;
-                radians = rhs.radians;
-            }
-            public override bool Equals(object obj)
-            {
-                if (obj == null)
-                    return false;
-
-                // Check if types match, ensures symmetry
-                if (typeof(angular_position) != obj.GetType())
-                    return false;
-
-                /// If the object cannot be cast as a angular_position, return false.  Note: this should never happen
-                angular_position pos = obj as angular_position;
-                if (pos == null)
-                    return false;
-
-                return encoder_count == pos.encoder_count;
-            }
-            public override int GetHashCode()
-            {
-                return _encoder_count.GetHashCode();
-            }
-
-            public event EventHandler<EventArgs> position_changed;
-
-            public static angular_position create_from_encoder_count(short e)
-            {
-                angular_position p = new angular_position();
-                p.encoder_count = e;
-                return p;
-            }
-            public static angular_position create_from_radians(double r)
-            {
-                angular_position p = new angular_position();
-                p.radians = r;
-                return p;
-            }
-            public static angular_position create_from_degrees(double d)
-            {
-                angular_position p = new angular_position();
-                p.degrees = d;
-                return p;
-            }
-        }
-        public class zoom_position
-        {
-            internal static Tuple<double, short>[] zoom_values = new Tuple<double, short>[29]  // Zoom ratios and their associated encoder counts (in decimal)
-            {
-                Tuple.Create( 1.0,  (short)    0),
-                Tuple.Create( 2.0,  (short) 5638),
-                Tuple.Create( 3.0,  (short) 8529),
-                Tuple.Create( 4.0,  (short)10336),
-                Tuple.Create( 5.0,  (short)11445),
-                Tuple.Create( 6.0,  (short)12384),
-                Tuple.Create( 7.0,  (short)13011),
-                Tuple.Create( 8.0,  (short)13637),
-                Tuple.Create( 9.0,  (short)14119),
-                Tuple.Create(10.0,  (short)14505),
-                Tuple.Create(11.0,  (short)14914),
-                Tuple.Create(12.0,  (short)15179),
-                Tuple.Create(13.0,  (short)15493),
-                Tuple.Create(14.0,  (short)15733),
-                Tuple.Create(15.0,  (short)15950),
-                Tuple.Create(16.0,  (short)16119),
-                Tuple.Create(17.0,  (short)16288),
-                Tuple.Create(18.0,  (short)16384),
-                Tuple.Create(36.0,  (short)24576),
-                Tuple.Create(54.0,  (short)27264),
-                Tuple.Create(72.0,  (short)28672),
-                Tuple.Create(90.0,  (short)29504),
-                Tuple.Create(108.0, (short)30016),
-                Tuple.Create(126.0, (short)30400),
-                Tuple.Create(144.0, (short)30720),
-                Tuple.Create(162.0, (short)30976),
-                Tuple.Create(180.0, (short)31104),
-                Tuple.Create(198.0, (short)31296),
-                Tuple.Create(216.0, (short)31424)
-            };
-
-            private short _encoder_count = zoom_values[0].Item2;
-            private double _zoom_ratio = zoom_values[0].Item1;
-
-            public short encoder_count
-            {
-                get { return _encoder_count; }
-                internal set
-                {
-                    for (int i = 0; i < zoom_values.Length; ++i)
-                        if (value >= zoom_values[i].Item2 && value <= zoom_values[i + 1].Item2)
-                        {
-                            _zoom_ratio = ((zoom_values[i + 1].Item1 - zoom_values[i].Item1) / (zoom_values[i + 1].Item2 - zoom_values[i].Item2)) * (value - zoom_values[i].Item2) + zoom_values[i].Item1;
-                            _encoder_count = value;
-                            if (position_changed != null) position_changed(this, EventArgs.Empty);  // Event triggered for data changed
-                            return;
-                        }
-
-                    throw new ResultOutOfRange("Zoom encoder count outside expected range");
-                }
-            }
-            public double ratio
-            {
-                get { return _zoom_ratio; }
-                internal set
-                {
-                    for (int i = 0; i < zoom_values.Length; ++i)
-                        if (value >= zoom_values[i].Item1 && value <= zoom_values[i + 1].Item1)
-                        {
-                            _encoder_count = (short)Math.Round(((zoom_values[i + 1].Item2 - zoom_values[i].Item2) / (zoom_values[i + 1].Item1 - zoom_values[i].Item1)) * (value - zoom_values[i].Item1) + zoom_values[i].Item2);
-                            _zoom_ratio = value;
-                            if (position_changed != null) position_changed(this, EventArgs.Empty);  // Event triggered for data changed
-                            return;
-                        }
-
-                    throw new ResultOutOfRange("Zoom ratio outside expected range");
-                }
-            }
-
-            public zoom_position() { }
-            public zoom_position(zoom_position rhs)
-            {
-                encoder_count = rhs.encoder_count;
-                ratio = rhs.ratio;
-            }
-            public override bool Equals(object obj)
-            {
-                if (obj == null)
-                    return false;
-
-                // Check if types match, ensures symmetry
-                if (typeof(zoom_position) != obj.GetType())
-                    return false;
-
-                /// If the object cannot be cast as a zoom_position, return false.  Note: this should never happen
-                zoom_position pos = obj as zoom_position;
-                if (pos == null)
-                    return false;
-
-                return encoder_count == pos.encoder_count;
-            }
-            public override int GetHashCode()
-            {
-                return _encoder_count.GetHashCode();
-            }
-
-            public event EventHandler<EventArgs> position_changed;
-
-            public static zoom_position create_from_encoder_count(short e)
-            {
-                zoom_position p = new zoom_position();
-                p.encoder_count = e;
-                return p;
-            }
-            public static zoom_position create_from_ratio(double r)
-            {
-                zoom_position p = new zoom_position();
-                p.ratio = r;
-                return p;
-            }
-        }
-
         // Serial connection
-        private SerialPort port { get; set; } = new SerialPort();
+        private SerialPort port = new SerialPort();
         private int camera_num;
         public bool hardware_connected { get; private set; } = false;
 
         // Code control
-        private ManualResetEventSlim serial_channel_open { get; set; } = new ManualResetEventSlim(true);
-        private ManualResetEventSlim socket_available { get; set; } = new ManualResetEventSlim(true);
-        private ManualResetEventSlim command_buffer_populated { get; set; } = new ManualResetEventSlim(false);  // This event is used to indicate that something is in the command buffer
-        private ManualResetEventSlim emergency_stop_turnstyle { get; set; } = new ManualResetEventSlim(false);
-        private CancellationTokenSource thread_control { get; set; } = new CancellationTokenSource();  // Thread control, used to tell threads to stop
+        private ManualResetEventSlim serial_channel_open = new ManualResetEventSlim(true);
+        private ManualResetEventSlim socket_available = new ManualResetEventSlim(true);
+        private ManualResetEventSlim command_buffer_populated = new ManualResetEventSlim(false);  // This event is used to indicate that something is in the command buffer
+        private ManualResetEventSlim emergency_stop_turnstyle = new ManualResetEventSlim(false);
+        private CancellationTokenSource thread_control = new CancellationTokenSource();  // Thread control, used to tell threads to stop
 
         // Tracers
         protected TraceSource log;
@@ -643,928 +1523,6 @@ namespace visca
             }
         }
 
-        // Camera commands
-        private class command
-        {
-            private visca_camera _command_limit_check_camera;
-            public visca_camera command_limit_check_camera
-            {
-                get { return _command_limit_check_camera; }
-                set
-                {
-                    if (value == null)
-                        throw new ArgumentException("Camera for limit checking must not be NULL!");
-
-                    command_limit_check_camera = value;
-                }
-            }
-            private int _command_camera_num;
-            public int command_camera_num
-            {
-                get { return _command_camera_num; }
-                set
-                {
-                    if (value < 0 || value > 8)
-                        throw new System.ArgumentException("Invalid camera number");
-                    else
-                        _command_camera_num = value;
-                }
-            }
-            public virtual Byte[] raw_serial_data
-            {
-                get { return null; }
-            }
-
-            public command(int camera_number, visca_camera limit_check_camera)
-            {
-                command_camera_num = camera_number;
-                command_limit_check_camera = limit_check_camera;
-            }
-            public command(command rhs)
-            {
-                command_camera_num = rhs.command_camera_num;
-                _command_limit_check_camera = rhs._command_limit_check_camera;
-            }
-            public override bool Equals(object obj)
-            {
-                if (obj == null)
-                    return false;
-
-                // Check if types match, ensures symmetry
-                if (typeof(command) != obj.GetType())
-                    return false;
-
-                // If the object cannot be cast as a command, return false.  Note: this should never happen
-                command cmd = obj as command;
-                if (cmd == null)
-                    return false;
-
-                return ((command_camera_num == cmd.command_camera_num) && (_command_limit_check_camera.Equals(cmd._command_limit_check_camera)));
-            }
-            public override int GetHashCode()
-            {
-                return ToStringDetail().GetHashCode();
-            }
-            public void deep_clone(command rhs)
-            {
-                command_camera_num = rhs.command_camera_num;
-                _command_limit_check_camera = rhs.command_limit_check_camera;
-            }
-            public override string ToString()
-            {
-                return "GENERIC COMMAND";
-            }
-            public virtual string ToStringDetail()
-            {
-                return ToString() + " " + "CameraNumber:" + command_camera_num;
-            }
-        }
-        private class connect_command  // This does not inherent from command because it doesn't need camera number
-        {
-            public Byte[] raw_serial_data
-            {
-                get
-                {
-                    Byte[] serial_data = new Byte[4];
-                    serial_data[0] = VISCA_CODE.HEADER;
-                    serial_data[0] |= (1 << 3);
-                    serial_data[0] &= 0xF8;
-                    serial_data[1] = 0x30;
-                    serial_data[2] = 0x01;
-                    serial_data[3] = 0xFF;
-
-                    return serial_data;
-                }
-            }
-
-            public connect_command() { }
-            public connect_command(connect_command rhs) { }
-            public override string ToString()
-            {
-                return "CONNECT COMMAND";
-            }
-        }
-        private class IF_CLEAR_command : command
-        {
-            public override Byte[] raw_serial_data
-            {
-                get
-                {
-                    Byte[] serial_data = new Byte[5];
-                    serial_data[0] = VISCA_CODE.HEADER;
-                    serial_data[0] |= (Byte)command_camera_num;
-                    serial_data[1] = VISCA_CODE.COMMAND;
-                    serial_data[2] = 0x00;
-                    serial_data[3] = 0x01;
-                    serial_data[4] = VISCA_CODE.TERMINATOR;
-
-                    return serial_data;
-                }
-            }
-
-            public IF_CLEAR_command(int camera_number, visca_camera limit_check_camera) : base(camera_number, limit_check_camera) { }
-            public IF_CLEAR_command(IF_CLEAR_command rhs) : base(rhs) { }
-            public override bool Equals(object obj)
-            {
-                if (obj == null)
-                    return false;
-
-                // Check if types match, ensures symmetry
-                if (typeof(IF_CLEAR_command) != obj.GetType())
-                    return false;
-
-                /// If the object cannot be cast as a IF_CLEAR_command, return false.  Note: this should never happen
-                IF_CLEAR_command cmd = obj as IF_CLEAR_command;
-                if (cmd == null)
-                    return false;
-
-                return base.Equals(new command(cmd));
-            }
-            public override string ToString()
-            {
-                return "EMERGENCY STOP";
-            }
-            public override string ToStringDetail()
-            {
-                return base.ToStringDetail();
-            }
-        }
-        private class pan_tilt_jog_command : command
-        {
-            private double _direction_rad;
-            public double direction_rad
-            {
-                get { return _direction_rad; }
-                set
-                {
-                    if (value > Math.PI || value < -Math.PI)  // Invalid direction?
-                        throw new System.ArgumentException("Invalid direction for jog of pan/tilt drive");
-                    else
-                        _direction_rad = value;
-                }
-            }
-            public double direction_deg
-            {
-                get { return direction_rad * (180.0 / Math.PI); }
-                set { direction_rad = value * (Math.PI / 180.0); }
-            }
-            private int _pan_tilt_speed;
-            public int pan_tilt_speed
-            {
-                get { return _pan_tilt_speed; }
-                set
-                {
-                    if (value >= command_limit_check_camera.hardware_minimum_pan_tilt_speed && value <= command_limit_check_camera.hardware_maximum_pan_tilt_speed)
-                        _pan_tilt_speed = value;
-                    else
-                        throw new System.ArgumentException("Invalid speed for pan/tilt drive");
-                }
-            }
-            public int pan_speed
-            {
-                get
-                {
-                    // Find percentage of maximum to move in direction
-                    double left_right = Math.Cos(direction_rad);
-
-                    return (int)Math.Round(left_right * pan_tilt_speed);
-                }
-                set
-                {
-                    try
-                    {
-                        double new_direction = Math.Atan2(tilt_speed, value);
-                        int new_pan_tilt_speed = (int)Math.Round(Math.Sqrt(Math.Pow(value, 2) + Math.Pow(tilt_speed, 2)));
-                        pan_tilt_speed = new_pan_tilt_speed;
-                        direction_rad = new_direction;
-                    }
-                    catch
-                    {
-                        throw new System.ArgumentException("Invalid speed for pan/tilt drive");
-                    }
-                }
-            }
-            public int tilt_speed
-            {
-                get
-                {
-                    // Find percentage of maximum to move in direction
-                    double up_down = Math.Sin(direction_rad);
-
-                    return (int)Math.Round(up_down * pan_tilt_speed);
-                }
-                set
-                {
-                    try
-                    {
-                        double new_direction = Math.Atan2(value, pan_speed);
-                        int new_pan_tilt_speed = (int)Math.Round(Math.Sqrt(Math.Pow(pan_speed, 2) + Math.Pow(value, 2)));
-                        pan_tilt_speed = new_pan_tilt_speed;
-                        direction_rad = new_direction;
-                    }
-                    catch
-                    {
-                        throw new System.ArgumentException("Invalid speed for pan/tilt drive");
-                    }
-                }
-            }
-            public override Byte[] raw_serial_data
-            {
-                get
-                {
-                    // Check to ensure that speed isn't out of limits.  This could happen if the camera changed since this command was created.
-                    if (_pan_tilt_speed < command_limit_check_camera.hardware_minimum_pan_tilt_speed || _pan_tilt_speed > command_limit_check_camera.hardware_maximum_pan_tilt_speed)
-                        throw new System.ArgumentException("Pan/Tilt Jog command outside speed limits!");
-
-                    Byte[] serial_data = new Byte[9];
-                    serial_data[0] = VISCA_CODE.HEADER;
-                    serial_data[0] |= (Byte)command_camera_num;
-                    serial_data[1] = VISCA_CODE.COMMAND;
-                    serial_data[2] = VISCA_CODE.CATEGORY_PAN_TILTER;
-                    serial_data[3] = VISCA_CODE.PT_DRIVE;
-                    serial_data[4] = (byte)(Math.Abs(pan_speed));
-                    serial_data[5] = (byte)(Math.Abs(tilt_speed));
-                    if (pan_speed > 0)
-                        serial_data[6] = VISCA_CODE.PT_DRIVE_HORIZ_RIGHT;
-                    else if (pan_speed < 0)
-                        serial_data[6] = VISCA_CODE.PT_DRIVE_HORIZ_LEFT;
-                    else  // pan_speed == 0
-                        serial_data[6] = VISCA_CODE.PT_DRIVE_HORIZ_STOP;  // Note: this is needed because speed of 0 still moves the camera for some reason
-                    if (tilt_speed > 0)
-                        serial_data[7] = VISCA_CODE.PT_DRIVE_VERT_UP;
-                    else if (tilt_speed < 0)
-                        serial_data[7] = VISCA_CODE.PT_DRIVE_VERT_DOWN;
-                    else  // tilt_speed == 0
-                        serial_data[7] = VISCA_CODE.PT_DRIVE_VERT_STOP;  // Note: this is needed because speed of 0 still moves the camera for some reason
-                    serial_data[8] = VISCA_CODE.TERMINATOR;
-
-                    return serial_data;
-                }
-            }
-
-            public pan_tilt_jog_command(int camera_number, visca_camera limit_check_camera, int speed = 6, double direction_in_degrees = 0)
-                : base(camera_number, limit_check_camera)
-            {
-                pan_tilt_speed = speed;
-                direction_deg = direction_in_degrees;
-            }
-            public pan_tilt_jog_command(pan_tilt_jog_command rhs)
-                : base(rhs)
-            {
-                direction_rad = rhs.direction_rad;
-                pan_tilt_speed = rhs.pan_tilt_speed;
-            }
-            public override bool Equals(object obj)
-            {
-                if (obj == null)
-                    return false;
-
-                // Check if types match, ensures symmetry
-                if (typeof(pan_tilt_jog_command) != obj.GetType())
-                    return false;
-
-                /// If the object cannot be cast as a pan_tilt_jog_command, return false.  Note: this should never happen
-                pan_tilt_jog_command cmd = obj as pan_tilt_jog_command;
-                if (cmd == null)
-                    return false;
-
-                return base.Equals(new command(cmd)) && direction_rad == cmd.direction_rad && pan_tilt_speed == cmd.pan_tilt_speed;
-            }
-            public void deep_clone(pan_tilt_jog_command rhs)
-            {
-                base.deep_clone(rhs);
-                direction_rad = rhs.direction_rad;
-                pan_tilt_speed = rhs.pan_tilt_speed;
-            }
-            public override string ToString()
-            {
-                return "PAN/TILT JOG";
-            }
-            public override string ToStringDetail()
-            {
-                return base.ToStringDetail() + " " + "Direction(degrees):" + direction_deg + " " + "Pan/TiltSpeed:" + pan_tilt_speed;
-            }
-        }
-        private class pan_tilt_stop_jog_command : command
-        {
-            public override Byte[] raw_serial_data
-            {
-                get
-                {
-                    Byte[] serial_data = new Byte[9];
-                    serial_data[0] = VISCA_CODE.HEADER;
-                    serial_data[0] |= (Byte)command_camera_num;
-                    serial_data[1] = VISCA_CODE.COMMAND;
-                    serial_data[2] = VISCA_CODE.CATEGORY_PAN_TILTER;
-                    serial_data[3] = VISCA_CODE.PT_DRIVE;
-                    serial_data[4] = (byte)2;  // This value doesn't matter
-                    serial_data[5] = (byte)2;  // This value doesn't matter
-                    serial_data[6] = VISCA_CODE.PT_DRIVE_HORIZ_STOP;
-                    serial_data[7] = VISCA_CODE.PT_DRIVE_VERT_STOP;
-                    serial_data[8] = VISCA_CODE.TERMINATOR;
-
-                    return serial_data;
-                }
-            }
-
-            public pan_tilt_stop_jog_command(int camera_number, visca_camera limit_check_camera) : base(camera_number, limit_check_camera) { }
-            public pan_tilt_stop_jog_command(pan_tilt_stop_jog_command rhs) : base(rhs) { }
-            public override bool Equals(object obj)
-            {
-                if (obj == null)
-                    return false;
-
-                // Check if types match, ensures symmetry
-                if (typeof(pan_tilt_stop_jog_command) != obj.GetType())
-                    return false;
-
-                /// If the object cannot be cast as a pan_tilt_stop_jog_command, return false.  Note: this should never happen
-                pan_tilt_stop_jog_command cmd = obj as pan_tilt_stop_jog_command;
-                if (cmd == null)
-                    return false;
-
-                return base.Equals(new command(cmd));
-            }
-            public override string ToString()
-            {
-                return "PAN/TILT STOP JOG";
-            }
-            public override string ToStringDetail()
-            {
-                return base.ToStringDetail();
-            }
-        }
-        private class pan_tilt_absolute_command : command
-        {
-            private angular_position _pan_pos;
-            public angular_position pan_pos
-            {
-                get { return _pan_pos; }
-                set
-                {
-                    if (value.encoder_count >= command_limit_check_camera.minimum_pan_angle.encoder_count && value.encoder_count <= command_limit_check_camera.maximum_pan_angle.encoder_count)
-                        _pan_pos = new angular_position(value);
-                    else
-                        throw new System.ArgumentException("Invalid angle for pan drive");
-                }
-            }
-            private angular_position _tilt_pos;
-            public angular_position tilt_pos
-            {
-                get { return _tilt_pos; }
-                set
-                {
-                    if (value.encoder_count >= command_limit_check_camera.minimum_tilt_angle.encoder_count && value.encoder_count <= command_limit_check_camera.maximum_tilt_angle.encoder_count)
-                        _tilt_pos = new angular_position(value);
-                    else
-                        throw new System.ArgumentException("Invalid angle for tilt drive");
-                }
-            }
-            private int _pan_tilt_speed;
-            public int pan_tilt_speed
-            {
-                get { return _pan_tilt_speed; }
-                set
-                {
-                    if (value >= command_limit_check_camera.hardware_minimum_pan_tilt_speed && value <= command_limit_check_camera.hardware_maximum_pan_tilt_speed)
-                        _pan_tilt_speed = value;
-                    else
-                        throw new System.ArgumentException("Invalid speed for pan/tilt drive");
-                }
-            }
-            public override Byte[] raw_serial_data
-            {
-                get
-                {
-                    // Check to ensure that speed, pan position, and tilt position aren't out of limits.  This could happen if the camera changed since this command was created.
-                    if (_pan_tilt_speed < command_limit_check_camera.hardware_minimum_pan_tilt_speed || _pan_tilt_speed > command_limit_check_camera.hardware_maximum_pan_tilt_speed ||
-                         pan_pos.encoder_count < command_limit_check_camera.minimum_pan_angle.encoder_count || pan_pos.encoder_count > command_limit_check_camera.maximum_pan_angle.encoder_count ||
-                         tilt_pos.encoder_count < command_limit_check_camera.minimum_tilt_angle.encoder_count || tilt_pos.encoder_count > command_limit_check_camera.maximum_tilt_angle.encoder_count)
-                        throw new System.ArgumentException("Pan/Tilt Absolute command outside limits!");
-
-                    Byte[] serial_data = new Byte[15];
-                    serial_data[0] = VISCA_CODE.HEADER;
-                    serial_data[0] |= (Byte)command_camera_num;
-                    serial_data[1] = VISCA_CODE.COMMAND;
-                    serial_data[2] = VISCA_CODE.CATEGORY_PAN_TILTER;
-                    serial_data[3] = VISCA_CODE.PT_ABSOLUTE_POSITION;
-                    serial_data[4] = (byte)pan_tilt_speed;
-                    serial_data[5] = (byte)pan_tilt_speed;
-                    serial_data[6] = (byte)((pan_pos.encoder_count & 0xF000) >> 12);
-                    serial_data[7] = (byte)((pan_pos.encoder_count & 0x0F00) >> 8);
-                    serial_data[8] = (byte)((pan_pos.encoder_count & 0x00F0) >> 4);
-                    serial_data[9] = (byte)(pan_pos.encoder_count & 0x000F);
-                    serial_data[10] = (byte)((tilt_pos.encoder_count & 0xF000) >> 12);
-                    serial_data[11] = (byte)((tilt_pos.encoder_count & 0x0F00) >> 8);
-                    serial_data[12] = (byte)((tilt_pos.encoder_count & 0x00F0) >> 4);
-                    serial_data[13] = (byte)(tilt_pos.encoder_count & 0x000F);
-                    serial_data[14] = VISCA_CODE.TERMINATOR;
-
-                    return serial_data;
-                }
-            }
-
-            public pan_tilt_absolute_command(int camera_number, visca_camera limit_check_camera, int speed = 6, angular_position pan_position = null, angular_position tilt_position = null)
-                : base(camera_number, limit_check_camera)
-            {
-                pan_tilt_speed = speed;
-                if (pan_position == null)
-                    pan_pos = new angular_position();
-                else
-                    pan_pos = new angular_position(pan_position);
-                if (tilt_position == null)
-                    tilt_pos = new angular_position();
-                else
-                    tilt_pos = new angular_position(tilt_position);
-            }
-            public pan_tilt_absolute_command(pan_tilt_absolute_command rhs)
-                : base(rhs)
-            {
-                pan_tilt_speed = rhs.pan_tilt_speed;
-                pan_pos = new angular_position(rhs.pan_pos);
-                tilt_pos = new angular_position(rhs.tilt_pos);
-            }
-            public override bool Equals(object obj)
-            {
-                if (obj == null)
-                    return false;
-
-                // Check if types match, ensures symmetry
-                if (typeof(pan_tilt_absolute_command) != obj.GetType())
-                    return false;
-
-                /// If the object cannot be cast as a pan_tilt_absolute_command, return false.  Note: this should never happen
-                pan_tilt_absolute_command cmd = obj as pan_tilt_absolute_command;
-                if (cmd == null)
-                    return false;
-
-                return base.Equals(new command(cmd)) && pan_pos.Equals(cmd.pan_pos) && tilt_pos.Equals(cmd.tilt_pos) && pan_tilt_speed == cmd.pan_tilt_speed;
-            }
-            public void deep_clone(pan_tilt_absolute_command rhs)
-            {
-                base.deep_clone(rhs);
-                pan_tilt_speed = rhs.pan_tilt_speed;
-                pan_pos = new angular_position(rhs.pan_pos);
-                tilt_pos = new angular_position(rhs.tilt_pos);
-            }
-            public override string ToString()
-            {
-                return "PAN/TILT ABSOLUTE";
-            }
-            public override string ToStringDetail()
-            {
-                return base.ToStringDetail() + " " + "PanPosition(degrees):" + pan_pos.degrees + " " + "TiltPosition(degrees):" + tilt_pos.degrees + " " + "Pan/TiltSpeed:" + pan_tilt_speed;
-            }
-        }
-        private class pan_tilt_cancel_command : command
-        {
-            private int _socket_num;
-            public int socket_num
-            {
-                get { return _socket_num; }
-                set
-                {
-                    if (value != 1 && value != 2)
-                        throw new System.ArgumentException("Invalid socket number");
-                    else
-                        _socket_num = value;
-                }
-            }
-            public override Byte[] raw_serial_data
-            {
-                get
-                {
-                    Byte[] serial_data = new Byte[3];
-                    serial_data[0] = VISCA_CODE.HEADER;
-                    serial_data[0] |= (Byte)command_camera_num;
-                    serial_data[1] = 0x20;
-                    serial_data[1] |= (Byte)socket_num;
-                    serial_data[2] = VISCA_CODE.TERMINATOR;
-
-                    return serial_data;
-                }
-            }
-
-            public pan_tilt_cancel_command(int camera_number, visca_camera limit_check_camera, int socket_number)
-                : base(camera_number, limit_check_camera)
-            {
-                socket_num = socket_number;
-            }
-            public pan_tilt_cancel_command(pan_tilt_cancel_command rhs)
-                : base(rhs)
-            {
-                socket_num = rhs.socket_num;
-            }
-            public override bool Equals(object obj)
-            {
-                if (obj == null)
-                    return false;
-
-                // Check if types match, ensures symmetry
-                if (typeof(pan_tilt_cancel_command) != obj.GetType())
-                    return false;
-
-                /// If the object cannot be cast as a pan_tilt_cancel_command, return false.  Note: this should never happen
-                pan_tilt_cancel_command cmd = obj as pan_tilt_cancel_command;
-                if (cmd == null)
-                    return false;
-
-                return base.Equals(new command(cmd)) && socket_num == cmd.socket_num;
-            }
-            public void deep_clone(pan_tilt_cancel_command rhs)
-            {
-                base.deep_clone(rhs);
-                socket_num = rhs.socket_num;
-            }
-            public override string ToString()
-            {
-                return "PAN/TILT STOP ABSOLUTE";
-            }
-            public override string ToStringDetail()
-            {
-                return base.ToStringDetail() + " " + "SocketNumber:" + socket_num;
-            }
-        }
-        private class pan_tilt_inquiry_command : command
-        {
-            public override Byte[] raw_serial_data
-            {
-                get
-                {
-                    Byte[] serial_data = new Byte[5];
-                    serial_data[0] = VISCA_CODE.HEADER;
-                    serial_data[0] |= (Byte)command_camera_num;
-                    serial_data[1] = VISCA_CODE.INQUIRY;
-                    serial_data[2] = VISCA_CODE.CATEGORY_PAN_TILTER;
-                    serial_data[3] = VISCA_CODE.PT_POSITION_INQ;
-                    serial_data[4] = VISCA_CODE.TERMINATOR;
-
-                    return serial_data;
-                }
-            }
-
-            public pan_tilt_inquiry_command(int camera_number, visca_camera limit_check_camera) : base(camera_number, limit_check_camera) { }
-            public pan_tilt_inquiry_command(pan_tilt_inquiry_command rhs) : base(rhs) { }
-            public override bool Equals(object obj)
-            {
-                if (obj == null)
-                    return false;
-
-                // Check if types match, ensures symmetry
-                if (typeof(pan_tilt_inquiry_command) != obj.GetType())
-                    return false;
-
-                /// If the object cannot be cast as a pan_tilt_inquiry_command, return false.  Note: this should never happen
-                pan_tilt_inquiry_command cmd = obj as pan_tilt_inquiry_command;
-                if (cmd == null)
-                    return false;
-
-                return base.Equals(new command(cmd));
-            }
-            public override string ToString()
-            {
-                return "PAN/TILT INQUIRY";
-            }
-            public override string ToStringDetail()
-            {
-                return base.ToStringDetail();
-            }
-        }
-        private class zoom_jog_command : command
-        {
-            public ZOOM_DIRECTION direction { get; set; }
-            private int _zoom_speed;
-            public int zoom_speed
-            {
-                get { return _zoom_speed; }
-                set
-                {
-                    if (value >= command_limit_check_camera.hardware_minimum_zoom_speed && value <= command_limit_check_camera.hardware_maximum_zoom_speed)
-                        _zoom_speed = value;
-                    else
-                        throw new System.ArgumentException("Invalid speed for zoom drive");
-                }
-            }
-            public override Byte[] raw_serial_data
-            {
-                get
-                {
-                    // Check to ensure that speed isn't out of limits.  This could happen if the camera changed since this command was created.
-                    if (_zoom_speed < command_limit_check_camera.hardware_minimum_zoom_speed || _zoom_speed > command_limit_check_camera.hardware_maximum_zoom_speed)
-                        throw new System.ArgumentException("Zoom Jog command outside speed limits!");
-
-                    // Check if zoom direction is "none".  There is no "zoom" command for none.  Instead a stop command should be sent.
-                    if (direction == ZOOM_DIRECTION.NONE)
-                        throw new System.ArgumentException("Zoom Jog command can't have a direction of 'none'!");
-
-                    Byte[] serial_data = new Byte[6];
-                    serial_data[0] = VISCA_CODE.HEADER;
-                    serial_data[0] |= (Byte)command_camera_num;
-                    serial_data[1] = VISCA_CODE.COMMAND;
-                    serial_data[2] = VISCA_CODE.CATEGORY_CAMERA1;
-                    serial_data[3] = VISCA_CODE.ZOOM;
-                    if (direction == ZOOM_DIRECTION.IN)
-                        serial_data[4] = (byte)(VISCA_CODE.ZOOM_TELE_SPEED | zoom_speed);
-                    else  // if (direction == ZOOM_DIRECTION.OUT)
-                        serial_data[4] = (byte)(VISCA_CODE.ZOOM_WIDE_SPEED | zoom_speed);
-                    serial_data[5] = VISCA_CODE.TERMINATOR;
-
-                    return serial_data;
-                }
-            }
-
-            public zoom_jog_command(int camera_number, visca_camera limit_check_camera, int speed = 4, ZOOM_DIRECTION d = ZOOM_DIRECTION.OUT)
-                : base(camera_number, limit_check_camera)
-            {
-                zoom_speed = speed;
-                direction = d;
-            }
-            public zoom_jog_command(zoom_jog_command rhs)
-                : base(rhs)
-            {
-                direction = rhs.direction;
-                zoom_speed = rhs.zoom_speed;
-            }
-            public override bool Equals(object obj)
-            {
-                if (obj == null)
-                    return false;
-
-                // Check if types match, ensures symmetry
-                if (typeof(zoom_jog_command) != obj.GetType())
-                    return false;
-
-                /// If the object cannot be cast as a zoom_jog_command, return false.  Note: this should never happen
-                zoom_jog_command cmd = obj as zoom_jog_command;
-                if (cmd == null)
-                    return false;
-
-                return base.Equals(new command(cmd)) && zoom_speed == cmd.zoom_speed && direction == cmd.direction;
-            }
-            public void deep_clone(zoom_jog_command rhs)
-            {
-                base.deep_clone(rhs);
-                direction = rhs.direction;
-                zoom_speed = rhs.zoom_speed;
-            }
-            public override string ToString()
-            {
-                return "ZOOM JOG";
-            }
-            public override string ToStringDetail()
-            {
-                string d;
-                if (direction == ZOOM_DIRECTION.IN)
-                    d = "IN";
-                else if (direction == ZOOM_DIRECTION.OUT)
-                    d = "OUT";
-                else // if (direction == ZOOM_DIRECTION.NONE)
-                    d = "NONE";
-                return base.ToStringDetail() + " " + "ZoomDirection:" + d + " " + "ZoomSpeed:" + zoom_speed;
-            }
-        }
-        private class zoom_stop_jog_command : command
-        {
-            public override Byte[] raw_serial_data
-            {
-                get
-                {
-                    Byte[] serial_data = new Byte[6];
-                    serial_data[0] = VISCA_CODE.HEADER;
-                    serial_data[0] |= (Byte)command_camera_num;
-                    serial_data[1] = VISCA_CODE.COMMAND;
-                    serial_data[2] = VISCA_CODE.CATEGORY_CAMERA1;
-                    serial_data[3] = VISCA_CODE.ZOOM;
-                    serial_data[4] = VISCA_CODE.ZOOM_STOP;
-                    serial_data[5] = VISCA_CODE.TERMINATOR;
-
-                    return serial_data;
-                }
-            }
-
-            public zoom_stop_jog_command(int camera_number, visca_camera limit_check_camera) : base(camera_number, limit_check_camera) { }
-            public zoom_stop_jog_command(zoom_stop_jog_command rhs) : base(rhs) { }
-            public override bool Equals(object obj)
-            {
-                if (obj == null)
-                    return false;
-
-                // Check if types match, ensures symmetry
-                if (typeof(zoom_stop_jog_command) != obj.GetType())
-                    return false;
-
-                /// If the object cannot be cast as a zoom_stop_jog_command, return false.  Note: this should never happen
-                zoom_stop_jog_command cmd = obj as zoom_stop_jog_command;
-                if (cmd == null)
-                    return false;
-
-                return base.Equals(new command(cmd));
-            }
-            public override string ToString()
-            {
-                return "ZOOM STOP JOG";
-            }
-            public override string ToStringDetail()
-            {
-                return base.ToStringDetail();
-            }
-        }
-        private class zoom_absolute_command : command
-        {
-            private zoom_position _zoom_pos;
-            public zoom_position zoom_pos
-            {
-                get { return _zoom_pos; }
-                set
-                {
-                    if (value.encoder_count >= command_limit_check_camera.minimum_zoom_ratio.encoder_count && value.encoder_count <= command_limit_check_camera.maximum_zoom_ratio.encoder_count)
-                        _zoom_pos = new zoom_position(value);
-                    else
-                        throw new System.ArgumentException("Invalid zoom ratio for zoom drive");
-                }
-            }
-            public override Byte[] raw_serial_data
-            {
-                get
-                {
-                    // Check to ensure that zoom position isn't out of limits.  This could happen if the camera changed since this command was created.
-                    if (zoom_pos.encoder_count < command_limit_check_camera.minimum_zoom_ratio.encoder_count || zoom_pos.encoder_count > command_limit_check_camera.maximum_zoom_ratio.encoder_count)
-                        throw new System.ArgumentException("Zoom Absolute command outside limits!");
-
-                    Byte[] serial_data = new Byte[9];
-                    serial_data[0] = VISCA_CODE.HEADER;
-                    serial_data[0] |= (Byte)command_camera_num;
-                    serial_data[1] = VISCA_CODE.COMMAND;
-                    serial_data[2] = VISCA_CODE.CATEGORY_CAMERA1;
-                    serial_data[3] = VISCA_CODE.ZOOM_VALUE;
-                    serial_data[4] = (byte)((zoom_pos.encoder_count & 0xF000) >> 12);
-                    serial_data[5] = (byte)((zoom_pos.encoder_count & 0x0F00) >> 8);
-                    serial_data[6] = (byte)((zoom_pos.encoder_count & 0x00F0) >> 4);
-                    serial_data[7] = (byte)(zoom_pos.encoder_count & 0x000F);
-                    serial_data[8] = VISCA_CODE.TERMINATOR;
-
-                    return serial_data;
-                }
-            }
-
-            public zoom_absolute_command(int camera_number, visca_camera limit_check_camera, zoom_position z = null)
-                : base(camera_number, limit_check_camera)
-            {
-                if (z == null)
-                    zoom_pos = new zoom_position();
-                else
-                    zoom_pos = new zoom_position(z);
-            }
-            public zoom_absolute_command(zoom_absolute_command rhs)
-                : base(rhs)
-            {
-                zoom_pos = new zoom_position(rhs.zoom_pos);
-            }
-            public override bool Equals(object obj)
-            {
-                if (obj == null)
-                    return false;
-
-                // Check if types match, ensures symmetry
-                if (typeof(zoom_absolute_command) != obj.GetType())
-                    return false;
-
-                /// If the object cannot be cast as a pan_tilt_absolute_command, return false.  Note: this should never happen
-                zoom_absolute_command cmd = obj as zoom_absolute_command;
-                if (cmd == null)
-                    return false;
-
-                return base.Equals(new command(cmd)) && zoom_pos.Equals(cmd.zoom_pos);
-            }
-            public void deep_clone(zoom_absolute_command rhs)
-            {
-                base.deep_clone(rhs);
-                zoom_pos = new zoom_position(rhs.zoom_pos);
-            }
-            public override string ToString()
-            {
-                return "ZOOM ABSOLUTE";
-            }
-            public override string ToStringDetail()
-            {
-                return base.ToStringDetail() + " " + "ZoomPosition(ratio):" + zoom_pos.ratio;
-            }
-        }
-        private class zoom_cancel_command : command
-        {
-            private int _socket_num;
-            public int socket_num
-            {
-                get { return _socket_num; }
-                set
-                {
-                    if (value != 1 && value != 2)
-                        throw new System.ArgumentException("Invalid socket number");
-                    else
-                        _socket_num = value;
-                }
-            }
-            public override Byte[] raw_serial_data
-            {
-                get
-                {
-                    Byte[] serial_data = new Byte[3];
-                    serial_data[0] = VISCA_CODE.HEADER;
-                    serial_data[0] |= (Byte)command_camera_num;
-                    serial_data[1] = 0x20;
-                    serial_data[1] |= (Byte)socket_num;
-                    serial_data[2] = VISCA_CODE.TERMINATOR;
-
-                    return serial_data;
-                }
-            }
-
-            public zoom_cancel_command(int camera_number, visca_camera limit_check_camera, int socket_number)
-                : base(camera_number, limit_check_camera)
-            {
-                socket_num = socket_number;
-            }
-            public zoom_cancel_command(zoom_cancel_command rhs)
-                : base(rhs)
-            {
-                socket_num = rhs.socket_num;
-            }
-            public override bool Equals(object obj)
-            {
-                if (obj == null)
-                    return false;
-
-                // Check if types match, ensures symmetry
-                if (typeof(zoom_cancel_command) != obj.GetType())
-                    return false;
-
-                /// If the object cannot be cast as a zoom_cancel_command, return false.  Note: this should never happen
-                zoom_cancel_command cmd = obj as zoom_cancel_command;
-                if (cmd == null)
-                    return false;
-
-                return base.Equals(new command(cmd)) && socket_num == cmd.socket_num;
-            }
-            public void deep_clone(zoom_cancel_command rhs)
-            {
-                base.deep_clone(rhs);
-                socket_num = rhs.socket_num;
-            }
-            public override string ToString()
-            {
-                return "ZOOM STOP ABSOLUTE";
-            }
-            public override string ToStringDetail()
-            {
-                return base.ToStringDetail() + " " + "SocketNumber:" + socket_num;
-            }
-        }
-        private class zoom_inquiry_command : command
-        {
-            public override Byte[] raw_serial_data
-            {
-                get
-                {
-                    Byte[] serial_data = new Byte[5];
-                    serial_data[0] = VISCA_CODE.HEADER;
-                    serial_data[0] |= (Byte)command_camera_num;
-                    serial_data[1] = VISCA_CODE.INQUIRY;
-                    serial_data[2] = VISCA_CODE.CATEGORY_CAMERA1;
-                    serial_data[3] = VISCA_CODE.ZOOM_VALUE;
-                    serial_data[4] = VISCA_CODE.TERMINATOR;
-
-                    return serial_data;
-                }
-            }
-
-            public zoom_inquiry_command(int camera_number, visca_camera limit_check_camera) : base(camera_number, limit_check_camera) { }
-            public zoom_inquiry_command(zoom_inquiry_command rhs) : base(rhs) { }
-            public override bool Equals(object obj)
-            {
-                if (obj == null)
-                    return false;
-
-                // Check if types match, ensures symmetry
-                if (typeof(zoom_inquiry_command) != obj.GetType())
-                    return false;
-
-                /// If the object cannot be cast as a zoom_inquiry_command, return false.  Note: this should never happen
-                zoom_inquiry_command cmd = obj as zoom_inquiry_command;
-                if (cmd == null)
-                    return false;
-
-                return base.Equals(new command(cmd));
-            }
-            public override string ToString()
-            {
-                return "ZOOM INQUIRY";
-            }
-            public override string ToStringDetail()
-            {
-                return base.ToStringDetail();
-            }
-        }
-
         // Hardware limits.  These values are all 0s and actual hardware limits are in derived classes
         public virtual int hardware_maximum_pan_tilt_speed
         {
@@ -1605,6 +1563,21 @@ namespace visca
         public virtual zoom_position hardware_minimum_zoom_ratio
         {
             get { return zoom_position.create_from_encoder_count(zoom_position.zoom_values[0].Item2); }
+        }
+
+        // Hardware encoder conversion factors.  These values are all 0s and actual factors are in derived classes
+        protected virtual double pan_degrees_per_encoder_count
+        {
+            get { return 0.0; }
+        }
+        protected virtual double tilt_degrees_per_encoder_count
+        {
+            get { return 0.0; }
+        }
+        protected virtual Tuple<double, short>[] zoom_values()
+        {
+            Tuple<double, short>[] zoom_values = new Tuple<double, short>[1] { Tuple.Create(0.0, (short)0) };
+            return zoom_values;
         }
 
         // User defined position limits
@@ -1827,11 +1800,11 @@ namespace visca
         }
 
         // Camera status
-        private DRIVE_STATUS pan_tilt_status { get; set; } = DRIVE_STATUS.FULL_STOP;
-        private DRIVE_STATUS zoom_status { get; set; } = DRIVE_STATUS.FULL_STOP;
-        public angular_position pan { get; private set; } = new angular_position();
-        public angular_position tilt { get; private set; } = new angular_position();
-        public zoom_position zoom { get; private set; } = new zoom_position();
+        private DRIVE_STATUS pan_tilt_status = DRIVE_STATUS.FULL_STOP;
+        private DRIVE_STATUS zoom_status = DRIVE_STATUS.FULL_STOP;
+        public angular_position pan { get; protected set; }   // Each inherited camera type should have its own conversion factors, therefore this should be intialized in the inherited classes
+        public angular_position tilt { get; protected set; }  // Each inherited camera type should have its own conversion factors, therefore this should be intialized in the inherited classes
+        public zoom_position zoom { get; protected set; }     // Each inherited camera type should have its own conversion factors, therefore this should be intialized in the inherited classes
         private void trace_camera_status(ref int line_count)
         {
             lock (log)
@@ -1874,13 +1847,13 @@ namespace visca
         }
 
         // Command buffer
-        private List<command> command_buffer { get; set; } = new List<command>();
-        private command failed_command { get; set; } = null;
-        private command last_successful_pan_tilt_cmd { get; set; } = null;
-        private command last_successful_zoom_cmd { get; set; } = null;
-        private command dispatched_cmd { get; set; } = null;
-        private command socket_one_cmd { get; set; } = null;
-        private command socket_two_cmd { get; set; } = null;
+        private List<command> command_buffer = new List<command>();
+        private command failed_command = null;
+        private command last_successful_pan_tilt_cmd = null;
+        private command last_successful_zoom_cmd = null;
+        private command dispatched_cmd = null;
+        private command socket_one_cmd = null;
+        private command socket_two_cmd = null;
         private void trace_command_buffer(ref int line_count)
         {
             lock (log)
@@ -2442,18 +2415,12 @@ namespace visca
 
             log.TraceEvent(TraceEventType.Information, 1, DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " Receive thread terminated");  // Thread terminated
         }
-        private Thread receive_thread { get; set; }
+        private Thread receive_thread;
 
         // Dispatch thread
 
         public visca_camera()
         {
-            // Setup for tracers
-            log = new TraceSource("Visca Log");
-            log.Switch.Level = SourceLevels.All;
-            position_log = new TraceSource("Visca Position Log");
-            position_log.Switch.Level = SourceLevels.All;
-
             // Default maximum and minimum angles/ratios
             _maximum_pan_angle = hardware_maximum_pan_angle;
             _minimum_pan_angle = hardware_minimum_pan_angle;
@@ -2546,12 +2513,63 @@ namespace visca
             get { return zoom_position.create_from_encoder_count(zoom_position.zoom_values[0].Item2); }
         }
 
+        // Hardware encoder conversion factors
+        protected override double pan_degrees_per_encoder_count
+        {
+            get { return 0.075; }
+        }
+        protected override double tilt_degrees_per_encoder_count
+        {
+            get { return 0.075; }
+        }
+        protected override Tuple<double, short>[] zoom_values()
+        {
+            Tuple<double, short>[] zoom_values = new Tuple<double, short>[29];  // Zoom ratios and their associated encoder counts (in decimal)
+            zoom_values[0] = Tuple.Create(1.0, (short)0);
+            zoom_values[0] = Tuple.Create(2.0, (short)5638);
+            zoom_values[0] = Tuple.Create(3.0, (short)8529);
+            zoom_values[0] = Tuple.Create(4.0, (short)10336);
+            zoom_values[0] = Tuple.Create(5.0, (short)11445);
+            zoom_values[0] = Tuple.Create(6.0, (short)12384);
+            zoom_values[0] = Tuple.Create(7.0, (short)13011);
+            zoom_values[0] = Tuple.Create(8.0, (short)13637);
+            zoom_values[0] = Tuple.Create(9.0, (short)14119);
+            zoom_values[0] = Tuple.Create(10.0, (short)14505);
+            zoom_values[0] = Tuple.Create(11.0, (short)14914);
+            zoom_values[0] = Tuple.Create(12.0, (short)15179);
+            zoom_values[0] = Tuple.Create(13.0, (short)15493);
+            zoom_values[0] = Tuple.Create(14.0, (short)15733);
+            zoom_values[0] = Tuple.Create(15.0, (short)15950);
+            zoom_values[0] = Tuple.Create(16.0, (short)16119);
+            zoom_values[0] = Tuple.Create(17.0, (short)16288);
+            zoom_values[0] = Tuple.Create(18.0, (short)16384);
+            zoom_values[0] = Tuple.Create(36.0, (short)24576);
+            zoom_values[0] = Tuple.Create(54.0, (short)27264);
+            zoom_values[0] = Tuple.Create(72.0, (short)28672);
+            zoom_values[0] = Tuple.Create(90.0, (short)29504);
+            zoom_values[0] = Tuple.Create(108.0, (short)30016);
+            zoom_values[0] = Tuple.Create(126.0, (short)30400);
+            zoom_values[0] = Tuple.Create(144.0, (short)30720);
+            zoom_values[0] = Tuple.Create(162.0, (short)30976);
+            zoom_values[0] = Tuple.Create(180.0, (short)31104);
+            zoom_values[0] = Tuple.Create(198.0, (short)31296);
+            zoom_values[0] = Tuple.Create(216.0, (short)31424);
+
+            return zoom_values;
+        }
+
         public EVI_D70() : base()
         {
+            // Setup for tracers
             log = new TraceSource("EVI_D70 Log");
             log.Switch.Level = SourceLevels.All;
             position_log = new TraceSource("ECI_D70 Position Log");
             position_log.Switch.Level = SourceLevels.All;
+
+            // Create pan/tilt/zoom positions
+            pan = new EVI_D70_angular_position();
+            tilt = new EVI_D70_angular_position();
+            zoom = new EVI_D70_zoom_position();
         }
 
         /*
