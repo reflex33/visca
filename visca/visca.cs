@@ -1548,19 +1548,15 @@ namespace visca
         }
 
         // Hardware encoder conversion factors.  These values are all 0s and actual factors are in derived classes
-        protected virtual double pan_degrees_per_encoder_count
+        protected abstract double pan_degrees_per_encoder_count
         {
-            get { return 0.0; }
+            get;
         }
-        protected virtual double tilt_degrees_per_encoder_count
+        protected abstract double tilt_degrees_per_encoder_count
         {
-            get { return 0.0; }
+            get;
         }
-        protected virtual Tuple<double, short>[] zoom_values()
-        {
-            Tuple<double, short>[] zoom_values = new Tuple<double, short>[1] { Tuple.Create(0.0, (short)0) };
-            return zoom_values;
-        }
+        protected abstract Tuple<double, short>[] zoom_values();
 
         // User defined position limits
         private angular_position _maximum_pan_angle;
