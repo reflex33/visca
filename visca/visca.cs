@@ -1505,46 +1505,46 @@ namespace visca
             }
         }
 
-        // Hardware limits.  These values are all 0s and actual hardware limits are in derived classes
-        public virtual int hardware_maximum_pan_tilt_speed
+        // Hardware limits.  These values are abstract as they need to be defined in the inheriting classes
+        public abstract int hardware_maximum_pan_tilt_speed
         {
-            get { return 0; }
+            get;
         }
-        public virtual int hardware_minimum_pan_tilt_speed
+        public abstract int hardware_minimum_pan_tilt_speed
         {
-            get { return 0; }
+            get;
         }
-        public virtual int hardware_maximum_zoom_speed
+        public abstract int hardware_maximum_zoom_speed
         {
-            get { return 0; }
+            get;
         }
-        public virtual int hardware_minimum_zoom_speed
+        public abstract int hardware_minimum_zoom_speed
         {
-            get { return 0; }
+            get;
         }
-        public virtual angular_position hardware_maximum_pan_angle
+        public abstract angular_position hardware_maximum_pan_angle
         {
-            get { return angular_position.create_from_encoder_count(0); }
+            get;
         }
-        public virtual angular_position hardware_minimum_pan_angle
+        public abstract angular_position hardware_minimum_pan_angle
         {
-            get { return angular_position.create_from_encoder_count(0); }
+            get;
         }
-        public virtual angular_position hardware_maximum_tilt_angle
+        public abstract angular_position hardware_maximum_tilt_angle
         {
-            get { return angular_position.create_from_degrees(0); }
+            get;
         }
-        public virtual angular_position hardware_minimum_tilt_angle
+        public abstract angular_position hardware_minimum_tilt_angle
         {
-            get { return angular_position.create_from_degrees(0); }
+            get;
         }
-        public virtual zoom_position hardware_maximum_zoom_ratio
+        public abstract zoom_position hardware_maximum_zoom_ratio
         {
-            get { return zoom_position.create_from_encoder_count(zoom_position.zoom_values[0].Item2); }
+            get;
         }
-        public virtual zoom_position hardware_minimum_zoom_ratio
+        public abstract zoom_position hardware_minimum_zoom_ratio
         {
-            get { return zoom_position.create_from_encoder_count(zoom_position.zoom_values[0].Item2); }
+            get;
         }
 
         // Hardware encoder conversion factors.  These values are all 0s and actual factors are in derived classes
@@ -2471,28 +2471,58 @@ namespace visca
         }
         public override angular_position hardware_maximum_pan_angle
         {
-            get { return angular_position.create_from_encoder_count(2267); }  // 0x08DB in the manual
+            get
+            {
+                angular_position result = new angular_position(this.pan_degrees_per_encoder_count);
+                result.encoder_count = 2267;  // 0x08DB in the manual
+                return result;
+            }  
         }
         public override angular_position hardware_minimum_pan_angle
         {
-            get { return angular_position.create_from_encoder_count(-2267); }  // 0xF725 in the manual
+            get
+            {
+                angular_position result = new angular_position(this.pan_degrees_per_encoder_count);
+                result.encoder_count = -2267;  // 0xF725 in the manual
+                return result;
+            }
         }
         public override angular_position hardware_maximum_tilt_angle
         {
-            get { return angular_position.create_from_degrees(88); }  // 0x04B0 in the manual, which is 90 degrees, but the camera can't reach that far
+            get
+            {
+                angular_position result = new angular_position(this.tilt_degrees_per_encoder_count);
+                result.degrees = 88;  // 0x04B0 in the manual, which is 90 degrees, but the camera can't reach that far
+                return result;
+            }
         }
         public override angular_position hardware_minimum_tilt_angle
         {
-            get { return angular_position.create_from_degrees(-27); }  // 0xFE70 in the manual, which is -30 degrees, but the camera can't reach that far
+            get
+            {
+                angular_position result = new angular_position(this.tilt_degrees_per_encoder_count);
+                result.degrees = -27;  // 0xFE70 in the manual, which is -30 degrees, but the camera can't reach that far
+                return result;
+            }
         }
         public override zoom_position hardware_maximum_zoom_ratio
         {
-            // Limiting the default to the optical zoom only (everything above 18x is digital)
-            get { return zoom_position.create_from_encoder_count(zoom_position.zoom_values[17].Item2); }
+            get
+            {
+                // Limiting the default to the optical zoom only (everything above 18x is digital)
+                zoom_position result = new zoom_position(this.zoom_values());
+                result.encoder_count = this.zoom_values()[17].Item2;
+                return result;
+            }
         }
         public override zoom_position hardware_minimum_zoom_ratio
         {
-            get { return zoom_position.create_from_encoder_count(zoom_position.zoom_values[0].Item2); }
+            get
+            {
+                zoom_position result = new zoom_position(this.zoom_values());
+                result.encoder_count = this.zoom_values()[0].Item2;
+                return result;
+            }
         }
 
         // Hardware encoder conversion factors
