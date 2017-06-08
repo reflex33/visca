@@ -186,7 +186,7 @@ namespace visca
         STOP_ABSOLUTE = 4
     }
     
-    // Angular and zoom positions abstract classes
+    // Angular and zoom positions classes
     public class angular_position
     {
         private double _degrees_per_encoder_count = 0;
@@ -253,7 +253,7 @@ namespace visca
 
         public event EventHandler<EventArgs> position_changed;
     }
-    abstract public class zoom_position
+    public class zoom_position
     {
         private Tuple<double, short>[] _zoom_values = new Tuple<double, short>[1] { Tuple.Create(0.0, (short) 0) };
         private short _encoder_count = 0;
@@ -330,19 +330,6 @@ namespace visca
         }
 
         public event EventHandler<EventArgs> position_changed;
-
-        public static zoom_position create_from_encoder_count(short e)
-        {
-            zoom_position p = new zoom_position();
-            p.encoder_count = e;
-            return p;
-        }
-        public static zoom_position create_from_ratio(double r)
-        {
-            zoom_position p = new zoom_position();
-            p.ratio = r;
-            return p;
-        }
     }
 
     // Camera commands
@@ -384,7 +371,7 @@ namespace visca
         }
         public command(command rhs)
         {
-            command_camera_num = rhs.command_camera_num;
+            _command_camera_num = rhs._command_camera_num;
             _command_limit_check_camera = rhs._command_limit_check_camera;
         }
         public override bool Equals(object obj)
@@ -1269,17 +1256,6 @@ namespace visca
 
     abstract public class visca_camera : IDisposable
     {
-        public class ResultOutOfRange : Exception
-        {
-            public ResultOutOfRange() { }
-            public ResultOutOfRange(string message) : base(message) { }
-            public ResultOutOfRange(string message, Exception inner) : base(message, inner) { }
-            protected ResultOutOfRange(
-              System.Runtime.Serialization.SerializationInfo info,
-              System.Runtime.Serialization.StreamingContext context)
-                : base(info, context) { }
-        }
-
         // Serial connection
         private SerialPort port = new SerialPort();
         private int camera_num;
@@ -1363,7 +1339,7 @@ namespace visca
 
             lock (command_buffer)
             {
-                // Eliminate any pan/tilt command from the buffer
+                // Eliminate any pan/tilt commands from the buffer
                 for (int i = 0; i < command_buffer.Count; ++i)
                     if (command_buffer[i] is pan_tilt_absolute_command || command_buffer[i] is pan_tilt_cancel_command ||
                         command_buffer[i] is pan_tilt_jog_command || command_buffer[i] is pan_tilt_stop_jog_command)  // There's already a pan/tilt command that is awaiting dispatch
@@ -1414,7 +1390,7 @@ namespace visca
                 }
             }
         }
-        public void absolute_pan_tilt(int speed, angular_position pan_angle, angular_position tilt_angle)
+        public void absolute_pan_tilt(int speed, double pan_degrees, double tilt_degrees)
         {
             if (!hardware_connected)  // No motion commands allowed now
                 return;
@@ -1427,6 +1403,10 @@ namespace visca
                         command_buffer[i] is pan_tilt_jog_command || command_buffer[i] is pan_tilt_stop_jog_command)  // There's already a pan/tilt command that is awaiting dispatch
                         command_buffer.RemoveAt(i);
 
+                angular_position pan_angle = new angular_position(this.pan_degrees_per_encoder_count);
+                pan_angle.degrees = pan_degrees;
+                angular_position tilt_angle = new angular_position(this.tilt_degrees_per_encoder_count);
+                tilt_angle.degrees = tilt_degrees;
                 command temp = new pan_tilt_absolute_command(camera_num, this, speed, pan_angle, tilt_angle);
                 command_buffer.Add(temp);  // Add it to the end of the buffer
                 command_buffer_populated.Set();  // Tell the dispatch thread that there is now something in the command buffer
@@ -1448,7 +1428,7 @@ namespace visca
 
             lock (command_buffer)
             {
-                // Eliminate any zoom command from the buffer
+                // Eliminate any zoom commands from the buffer
                 for (int i = 0; i < command_buffer.Count; ++i)
                     if (command_buffer[i] is zoom_absolute_command || command_buffer[i] is zoom_cancel_command ||
                         command_buffer[i] is zoom_jog_command || command_buffer[i] is zoom_stop_jog_command)  // There's already a zoom command that is awaiting dispatch
@@ -1495,7 +1475,7 @@ namespace visca
                 }
             }
         }
-        public void absolute_zoom(zoom_position zoom_ratio)
+        public void absolute_zoom(double zoom_ratio)
         {
             if (!hardware_connected)  // No motion commands allowed now
                 return;
@@ -1508,7 +1488,9 @@ namespace visca
                         command_buffer[i] is zoom_jog_command || command_buffer[i] is zoom_stop_jog_command)  // There's already a zoom command that is awaiting dispatch
                         command_buffer.RemoveAt(i);
 
-                command temp = new zoom_absolute_command(camera_num, this, zoom_ratio);
+                zoom_position zoom_pos = new zoom_position(this.zoom_values());
+                zoom_pos.ratio = zoom_ratio;
+                command temp = new zoom_absolute_command(camera_num, this, zoom_pos);
                 command_buffer.Add(temp);  // Add it to the end of the buffer
                 command_buffer_populated.Set();  // Tell the dispatch thread that there is now something in the command buffer
 
