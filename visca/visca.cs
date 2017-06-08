@@ -1260,6 +1260,76 @@ namespace visca
         private SerialPort port = new SerialPort();
         private int camera_num;
         public bool hardware_connected { get; private set; } = false;
+        public bool connect(String port_name)
+        {
+            // Setup serial port values
+            port.BaudRate = 38400;
+            port.DataBits = 8;
+            port.NewLine = new string((char)0xFF, 1);  // This is the visca terminator, we don't use "readline" but its here for clarity
+            port.Parity = Parity.None;
+            port.PortName = port_name;
+            port.StopBits = StopBits.One;
+            port.ReadTimeout = 2000;
+
+            try { port.Open(); }  // Open serial connection
+            catch { return hardware_connected; }  // No connection, nothing else to do
+
+            // Connect to the camera and get camera number
+            lock (log)
+            {
+                log.TraceEvent(TraceEventType.Information, 1, DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " Connecting to cammera...");
+            }
+            connect_command connect_cmd = new connect_command();
+            port.Write(connect_cmd.raw_serial_data, 0, connect_cmd.raw_serial_data.Length);
+            List<int> response;
+            int response_type = get_response(out response);
+            while (response_type == VISCA_CODE.RESPONSE_ACK)  // Skip acknowledge messages
+                response_type = get_response(out response);
+            if (response_type != VISCA_CODE.RESPONSE_ADDRESS)  // Got camera number
+            {
+                lock (log)
+                {
+                    log.TraceEvent(TraceEventType.Information, 1, DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " Failed to connect to camera");
+                }
+                return hardware_connected;  // Note: if an error or timeout occurs, connected is false (as expected)
+            }
+            camera_num = response[2] - 1;
+            lock (log)
+            {
+                log.TraceEvent(TraceEventType.Information, 1, DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " Connected to camera. Camera number: " + camera_num);
+            }
+
+            // Start the background threads
+            receive_thread.Start();
+            dispatch_thread.Start();
+            inquiry_after_stop_thread.Start();
+            pid_thread.Start();
+
+            // Get the current pan/tilt/zoom position
+            command temp = new pan_tilt_inquiry_command(camera_num, this);
+            command_buffer.Add(temp);
+            command_buffer_populated.Set();  // Tell the dispatch thread that there is now something in the command buffer
+            lock (log)
+            {
+                int line_count = 1;
+                log.TraceEvent(TraceEventType.Information, line_count++, DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " Command added to buffer: " + temp.ToString());
+                log.TraceEvent(TraceEventType.Information, line_count++, "-----------------------");
+                trace_command_buffer(ref line_count);
+            }
+            temp = new zoom_inquiry_command(camera_num, this);
+            command_buffer.Add(temp);
+            command_buffer_populated.Set();  // Tell the dispatch thread that there is now something in the command buffer
+            lock (log)
+            {
+                int line_count = 1;
+                log.TraceEvent(TraceEventType.Information, line_count++, DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " Command added to buffer: " + temp.ToString());
+                log.TraceEvent(TraceEventType.Information, line_count++, "-----------------------");
+                trace_command_buffer(ref line_count);
+            }
+
+            hardware_connected = true;  // We do this after getting the positions as "hardware_connected == false" is the check so users can put anything in the command buffer
+            return hardware_connected;
+        }
 
         // Code control
         private ManualResetEventSlim serial_channel_open = new ManualResetEventSlim(true);
@@ -1785,7 +1855,7 @@ namespace visca
         // Camera status
         private DRIVE_STATUS pan_tilt_status = DRIVE_STATUS.FULL_STOP;
         private DRIVE_STATUS zoom_status = DRIVE_STATUS.FULL_STOP;
-        public angular_position pan { get; protected set; }   // Each inherited camera type should have its own conversion factors, therefore this should be intialized in the inherited classes
+        public angular_position pan { get; protected set; }
         public angular_position tilt { get; protected set; }  // Each inherited camera type should have its own conversion factors, therefore this should be intialized in the inherited classes
         public zoom_position zoom { get; protected set; }     // Each inherited camera type should have its own conversion factors, therefore this should be intialized in the inherited classes
         private void trace_camera_status(ref int line_count)
@@ -2426,7 +2496,16 @@ namespace visca
                         lock (command_buffer)
                         {
                             pan_tilt_inquiry_complete.Reset();
-                            command_buffer.Add(new pan_tilt_inquiry_command(camera_num, this));
+                            command temp = new pan_tilt_inquiry_command(camera_num, this);
+                            command_buffer.Add(temp);
+                            command_buffer_populated.Set();  // Tell the dispatch thread that there is now something in the command buffer
+                            lock (log)
+                            {
+                                int line_count = 1;
+                                log.TraceEvent(TraceEventType.Information, line_count++, DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " Command added to buffer: " + temp.ToString());
+                                log.TraceEvent(TraceEventType.Information, line_count++, "-----------------------");
+                                trace_command_buffer(ref line_count);
+                            }
                         }
                         pan_tilt_inquiry_complete.Wait(thread_control.Token);  // Wait for the inquiry to be complete
                         short p = pan.encoder_count;
@@ -2441,7 +2520,16 @@ namespace visca
                         lock (command_buffer)
                         {
                             zoom_inquiry_complete.Reset();
-                            command_buffer.Add(new zoom_inquiry_command(camera_num, this));
+                            command temp = new zoom_inquiry_command(camera_num, this);
+                            command_buffer.Add(temp);
+                            command_buffer_populated.Set();  // Tell the dispatch thread that there is now something in the command buffer
+                            lock (log)
+                            {
+                                int line_count = 1;
+                                log.TraceEvent(TraceEventType.Information, line_count++, DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " Command added to buffer: " + temp.ToString());
+                                log.TraceEvent(TraceEventType.Information, line_count++, "-----------------------");
+                                trace_command_buffer(ref line_count);
+                            }
                         }
                         zoom_inquiry_complete.Wait(thread_control.Token);  // Wait for the inquiry to be complete
                         short z = zoom.encoder_count;
@@ -2465,7 +2553,10 @@ namespace visca
 
         // Dispatch thread
 
-        public visca_camera()
+        public visca_camera() : this(null)
+        {
+        }
+        public visca_camera(String port_name)
         {
             // Default maximum and minimum angles/ratios
             _maximum_pan_angle = hardware_maximum_pan_angle;
@@ -2475,9 +2566,23 @@ namespace visca
             _maximum_zoom_ratio = hardware_maximum_zoom_ratio;
             _minimum_zoom_ratio = hardware_minimum_zoom_ratio;
 
+            // Create pan/tilt/zoom positions
+            pan = new angular_position(pan_degrees_per_encoder_count);
+            tilt = new angular_position(tilt_degrees_per_encoder_count);
+            zoom = new zoom_position(zoom_values());
+
+            // Setup for tracers
+            log = new TraceSource(ToString() + " Log");
+            log.Switch.Level = SourceLevels.All;
+            position_log = new TraceSource(ToString() + " Position Log");
+            position_log.Switch.Level = SourceLevels.All;
+
             // Threads
             receive_thread = new Thread(new ThreadStart(receive_DoWork));
             inquiry_after_stop_thread = new Thread(new ThreadStart(inquiry_after_stop_DoWork));
+
+            if (port_name != null)
+                connect(port_name);
         }
         public override bool Equals(object obj)
         {
@@ -2635,18 +2740,16 @@ namespace visca
             return zoom_values;
         }
 
-        public EVI_D70() : base()
+        public override string ToString()
         {
-            // Setup for tracers
-            log = new TraceSource("EVI_D70 Log");
-            log.Switch.Level = SourceLevels.All;
-            position_log = new TraceSource("ECI_D70 Position Log");
-            position_log.Switch.Level = SourceLevels.All;
+            return "EVI_D70";
+        }
 
-            // Create pan/tilt/zoom positions
-            pan = new angular_position(this.pan_degrees_per_encoder_count);
-            tilt = new angular_position(this.tilt_degrees_per_encoder_count);
-            zoom = new zoom_position(this.zoom_values());
+        public EVI_D70() : this(null)
+        {
+        }
+        public EVI_D70(String port_name) : base(port_name)
+        {
         }
 
         /*
