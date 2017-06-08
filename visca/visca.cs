@@ -2618,6 +2618,7 @@ namespace visca
             else
                 return false;
         }
+        public abstract override string ToString();
     }
 
     public class EVI_D70 : visca_camera
@@ -2740,16 +2741,15 @@ namespace visca
             return zoom_values;
         }
 
-        public override string ToString()
-        {
-            return "EVI_D70";
-        }
-
         public EVI_D70() : this(null)
         {
         }
         public EVI_D70(String port_name) : base(port_name)
         {
+        }
+        public override string ToString()
+        {
+            return "EVI_D70";
         }
 
         /*
