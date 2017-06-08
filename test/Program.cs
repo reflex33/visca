@@ -18,6 +18,8 @@ namespace test
 
             EVI_D70 camera = new EVI_D70("COM4");
 
+            // check that the default max/mins are correct (worried that the base constructor is called before the correct values in the inherited class exist)
+
             camera.maximum_pan_angle = EVI_D70.pan_position.create_from_degrees(90);
             camera.minimum_pan_angle = EVI_D70.pan_position.create_from_degrees(-90);
             camera.maximum_tilt_angle = EVI_D70.tilt_position.create_from_degrees(45);

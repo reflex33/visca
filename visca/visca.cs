@@ -1267,6 +1267,11 @@ namespace visca
         private ManualResetEventSlim command_buffer_populated = new ManualResetEventSlim(false);  // This event is used to indicate that something is in the command buffer
         private ManualResetEventSlim emergency_stop_turnstyle = new ManualResetEventSlim(false);
         private CancellationTokenSource thread_control = new CancellationTokenSource();  // Thread control, used to tell threads to stop
+        private bool pan_tilt_inquiry_after_stop = false;
+        private bool zoom_inquiry_after_stop = false;
+        private ManualResetEventSlim after_stop = new ManualResetEventSlim(false);
+        private ManualResetEventSlim pan_tilt_inquiry_complete = new ManualResetEventSlim(false);
+        private ManualResetEventSlim zoom_inquiry_complete = new ManualResetEventSlim(false);
 
         // Tracers
         protected TraceSource log;
@@ -2104,9 +2109,12 @@ namespace visca
                                         trace_command_buffer(ref line_count);
                                     }
 
-                                    pan_tilt_inquiry_after_stop = true;  // Doing both inquiries here because we don't know which drives stopped moving
-                                    zoom_inquiry_after_stop = true;      // Also it doesn't hurt to do an extra inquiry
-                                    after_stop.Set();  // Continue doing inquiries until the drive has stopped moving
+                                    // Continue doing inquiries until the drive has stopped moving
+                                    // Doing both inquiries here because we don't know which drives stopped moving
+                                    // ...also it doesn't hurt to do an extra inquiry
+                                    pan_tilt_inquiry_after_stop = true;
+                                    zoom_inquiry_after_stop = true;
+                                    after_stop.Set();
                                 }
                             }
                             else  // A command has been completed
@@ -2386,14 +2394,74 @@ namespace visca
                 }
                 catch (InvalidOperationException)  // Serial port wasn't open
                 {
-                    log.TraceEvent(TraceEventType.Error, 1, DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " Serial port error (port not open)");
-                    if (serial_port_error != null) serial_port_error(this, EventArgs.Empty);
+                    lock (log)
+                    {
+                        log.TraceEvent(TraceEventType.Error, 1, DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " Serial port error (port not open)");
+                        if (serial_port_error != null) serial_port_error(this, EventArgs.Empty);
+                    }
                 }
             }
 
-            log.TraceEvent(TraceEventType.Information, 1, DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " Receive thread terminated");  // Thread terminated
+            lock (log)
+            {
+                log.TraceEvent(TraceEventType.Information, 1, DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " Receive thread terminated");  // Thread terminated
+            }
         }
         private Thread receive_thread;
+
+        // Inquiry after stop thread
+        private void inquiry_after_stop_DoWork()
+        {
+            short last_pan = pan.encoder_count;
+            short last_tilt = tilt.encoder_count;
+            short last_zoom = zoom.encoder_count;
+
+            while (true)
+            {
+                try
+                {
+                    after_stop.Wait(thread_control.Token);  // Wait until "after a stop command" has happened
+                    if (pan_tilt_inquiry_after_stop)  // A pan/tilt stop command happened
+                    {
+                        lock (command_buffer)
+                        {
+                            pan_tilt_inquiry_complete.Reset();
+                            command_buffer.Add(new pan_tilt_inquiry_command(camera_num, this));
+                        }
+                        pan_tilt_inquiry_complete.Wait(thread_control.Token);  // Wait for the inquiry to be complete
+                        short p = pan.encoder_count;
+                        short t = tilt.encoder_count;
+                        if (p == last_pan && t == last_tilt)  // The camera has stopped moving
+                            pan_tilt_inquiry_after_stop = false;
+                        last_pan = p;
+                        last_tilt = t;
+                    }
+                    else if (zoom_inquiry_after_stop)  // A zoom stop command happened
+                    {
+                        lock (command_buffer)
+                        {
+                            zoom_inquiry_complete.Reset();
+                            command_buffer.Add(new zoom_inquiry_command(camera_num, this));
+                        }
+                        zoom_inquiry_complete.Wait(thread_control.Token);  // Wait for the inquiry to be complete
+                        short z = zoom.encoder_count;
+                        if (z == last_zoom)  // The camera has stopped moving
+                            zoom_inquiry_after_stop = false;
+                        last_zoom = z;
+                    }
+                    else  // If no more inquiry is required (!pan_tilt_inquiry_after_stop && !zoom_inquiry_after_stop)
+                        after_stop.Reset();
+                }
+                catch (OperationCanceledException)
+                {
+                    lock (log)
+                    {
+                        log.TraceEvent(TraceEventType.Information, 1, DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " Receive thread terminated");  // Thread terminated
+                    }
+                }
+            }
+        }
+        private Thread inquiry_after_stop_thread;
 
         // Dispatch thread
 
@@ -2409,6 +2477,7 @@ namespace visca
 
             // Threads
             receive_thread = new Thread(new ThreadStart(receive_DoWork));
+            inquiry_after_stop_thread = new Thread(new ThreadStart(inquiry_after_stop_DoWork));
         }
         public override bool Equals(object obj)
         {
@@ -2575,9 +2644,9 @@ namespace visca
             position_log.Switch.Level = SourceLevels.All;
 
             // Create pan/tilt/zoom positions
-            pan = new EVI_D70_angular_position();
-            tilt = new EVI_D70_angular_position();
-            zoom = new EVI_D70_zoom_position();
+            pan = new angular_position(this.pan_degrees_per_encoder_count);
+            tilt = new angular_position(this.tilt_degrees_per_encoder_count);
+            zoom = new zoom_position(this.zoom_values());
         }
 
         /*
