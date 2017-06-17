@@ -2579,7 +2579,9 @@ namespace visca
 
             // Threads
             receive_thread = new Thread(new ThreadStart(receive_DoWork));
+            dispatch_thread = new Thread(new ThreadStart(dispatch_DoWork));
             inquiry_after_stop_thread = new Thread(new ThreadStart(inquiry_after_stop_DoWork));
+            pid_thread = new Thread(new ThreadStart(pid_DoWork));
 
             if (port_name != null)
                 connect(port_name);
