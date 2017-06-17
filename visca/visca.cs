@@ -2594,7 +2594,283 @@ namespace visca
 
                     lock (command_buffer)
                     {
+                        // If there are no commands and the camera is not moving, we can stop the dispatch thread
+                        if (command_buffer.Count == 0 && pan_tilt_status == DRIVE_STATUS.FULL_STOP && zoom_status == DRIVE_STATUS.FULL_STOP)
+                        {
+                            command_buffer_populated.Reset();  // Sleep the dispatch thread until something goes into the buffer
+                            continue;
+                        }
 
+                        // If the next command is a full stop, skip straight to sending it.  Note that no open socket is needed for this operation
+                        if (command_buffer.Count > 0 && command_buffer[0] is IF_CLEAR_command)
+                        {
+                            dispatch_next_command();
+                            continue;
+                        }
+
+                        // If the pan tilt drive is currently jogging and outside of the limits we need to stop that movement
+                        // Note:  We check for an open socket and that the last successful pan tilt command is a jog command here.  It is possible for the drive
+                        //        to be jogging when these status variables are not set.  This would happen IMMEDIATELY after a jog command was acknowledged.  In that case,
+                        //        this code would not execute until that command is "complete" which would happen extremely quickly.  Therefore we are just ignoring the small
+                        //        corner case where it starts to jog, but before it "completes" the jog; it jogs past its limit.
+                        if (socket_available.IsSet && pan_tilt_status == DRIVE_STATUS.JOG && last_successful_pan_tilt_cmd is pan_tilt_jog_command)
+                        {
+                            pan_tilt_jog_command new_cmd = new pan_tilt_jog_command((pan_tilt_jog_command)last_successful_pan_tilt_cmd);  // Make a copy of the command
+                            bool modified = false;
+                            bool need_stop_cmd = false;
+
+                            // If the pan drive is out of bounds...
+                            if ((pan.encoder_count >= maximum_pan_angle.encoder_count && ((pan_tilt_jog_command)last_successful_pan_tilt_cmd).pan_speed > 0) ||
+                                 (pan.encoder_count <= minimum_pan_angle.encoder_count && ((pan_tilt_jog_command)last_successful_pan_tilt_cmd).pan_speed < 0))
+                            {
+                                modified = true;
+                                try { new_cmd.pan_speed = 0; }
+                                catch { need_stop_cmd = true; }  // Exception thrown when both speeds are at 0 (which is not a valid jog command)
+                            }
+
+                            // If the tilt drive is out of bounds...
+                            if ((tilt.encoder_count >= maximum_tilt_angle.encoder_count && ((pan_tilt_jog_command)last_successful_pan_tilt_cmd).tilt_speed > 0) ||
+                                 (tilt.encoder_count <= minimum_tilt_angle.encoder_count && ((pan_tilt_jog_command)last_successful_pan_tilt_cmd).tilt_speed < 0))
+                            {
+                                modified = true;
+                                try { new_cmd.tilt_speed = 0; }
+                                catch { need_stop_cmd = true; }  // Exception thrown when both speeds are at 0 (which is not a valid jog command)
+                            }
+
+                            if (modified)  // Does a drive need stopping?
+                            {
+                                // If both speeds are now zero, we change this to a stop command
+                                if (need_stop_cmd)
+                                    command_buffer.Insert(0, new pan_tilt_stop_jog_command(camera_num, this));
+                                else  // We can use the modified jog command
+                                    command_buffer.Insert(0, new_cmd);
+
+                                dispatch_next_command();
+                                continue;
+                            }
+                        }
+
+                        // If the zoom drive is currently jogging and outside of the limits we need to stop that movement
+                        // Note:  We check for an open socket and that the last successful zoom command is a jog command here.  It is possible for the drive
+                        //        to be jogging when these status variables are not set.  This would happen IMMEDIATELY after a jog command was acknowledged.  In that case,
+                        //        this code would not execute until that command is "complete" which would happen extremely quickly.  Therefore we are just ignoring the small
+                        //        corner case where it starts to jog, but before it "completes" the jog; it jogs past its limit.
+                        if (socket_available.IsSet && zoom_status == DRIVE_STATUS.JOG && last_successful_zoom_cmd is zoom_jog_command &&
+                            ((zoom.encoder_count >= maximum_zoom_ratio.encoder_count && ((zoom_jog_command)last_successful_zoom_cmd).direction == ZOOM_DIRECTION.IN) ||
+                             (zoom.encoder_count <= minimum_zoom_ratio.encoder_count && ((zoom_jog_command)last_successful_zoom_cmd).direction == ZOOM_DIRECTION.OUT)))
+                        {
+                            command_buffer.Insert(0, new zoom_stop_jog_command(camera_num, this));
+                            dispatch_next_command();
+                            continue;
+                        }
+
+                        // If there is nothing in the buffer (and the camera must be moving in this case or the thread would be asleep already) or ...
+                        // there IS something in the buffer, but it isn't an inquiry command and it has been awhile since we did an inquiry command...
+                        // then we want to send an inquiry
+                        if (command_buffer.Count == 0 || (num_cmds_since_inquiry >= 2 && (!(command_buffer[0] is pan_tilt_inquiry_command) && !(command_buffer[0] is zoom_inquiry_command))))
+                        {
+                            if (pan_tilt_status != DRIVE_STATUS.FULL_STOP && zoom_status != DRIVE_STATUS.FULL_STOP)  // Both drives are moving
+                            {
+                                if (last_inquiry_was_pan_tilt)
+                                    command_buffer.Insert(0, new zoom_inquiry_command(camera_num, this));
+                                else
+                                    command_buffer.Insert(0, new pan_tilt_inquiry_command(camera_num, this));
+                            }
+                            else if (pan_tilt_status != DRIVE_STATUS.FULL_STOP)  // Just the pan/tilt drive is moving
+                                command_buffer.Insert(0, new pan_tilt_inquiry_command(camera_num, this));
+                            else if (zoom_status != DRIVE_STATUS.FULL_STOP && socket_available.IsSet)  // Just the zoom drive is moving, check for socket available here to fix zoom inquiry bug (more detail below)
+                                command_buffer.Insert(0, new zoom_inquiry_command(camera_num, this));
+                        }
+
+                        ////   At this point, there must be something in the buffer   ////
+                        ////   We will handle a few cases where we can't, or don't want to, send the next command, but otherwise we will send along the command   ////
+
+                        // If the command is the same as the last executed command there is no reason to send it again
+                        if (command_buffer[0].Equals(last_successful_pan_tilt_cmd) || command_buffer[0].Equals(last_successful_zoom_cmd))
+                        {
+                            Trace.WriteLine(DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " Command same as previous sent command, removing: " + command_buffer[0].ToString());
+                            command_buffer.RemoveAt(0);
+                            continue;
+                        }
+
+                        // Next command is a pan/tilt jog, but it would jog out of range
+                        // If we can fix this command (by making one of the directions zero), we do that, but still inform the user that there was an error
+                        if (command_buffer[0] is pan_tilt_jog_command)
+                        {
+                            bool modified = false;
+                            bool need_stop_cmd = false;
+
+                            // If the pan drive would be put out of bounds...
+                            if ((pan.encoder_count >= maximum_pan_angle.encoder_count && ((pan_tilt_jog_command)command_buffer[0]).pan_speed > 0) ||
+                                 (pan.encoder_count <= minimum_pan_angle.encoder_count && ((pan_tilt_jog_command)command_buffer[0]).pan_speed < 0))
+                            {
+                                modified = true;
+                                try { ((pan_tilt_jog_command)command_buffer[0]).pan_speed = 0; }
+                                catch { need_stop_cmd = true; }  // Exception thrown when both speeds are at 0 (which is not a valid jog command)
+                            }
+
+                            // If the tilt drive would be put out of bounds...
+                            if ((tilt.encoder_count >= maximum_tilt_angle.encoder_count && ((pan_tilt_jog_command)command_buffer[0]).tilt_speed > 0) ||
+                                 (tilt.encoder_count <= minimum_tilt_angle.encoder_count && ((pan_tilt_jog_command)command_buffer[0]).tilt_speed < 0))
+                            {
+                                modified = true;
+                                try { ((pan_tilt_jog_command)command_buffer[0]).tilt_speed = 0; }
+                                catch { need_stop_cmd = true; }  // Exception thrown when both speeds are at 0 (which is not a valid jog command)
+                            }
+
+                            // If we made a change...
+                            if (modified)
+                            {
+                                // Inform the user that they requested a jog out of bounds
+                                Trace.WriteLine(DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " User request movement out of range: " + command_buffer[0].ToString());
+                                if (requested_jog_limit_error != null) requested_jog_limit_error(this, EventArgs.Empty);  // Inform the "user" that an error happened
+
+                                // If both speeds are now zero, we change this to a stop command
+                                if (need_stop_cmd)
+                                {
+                                    command_buffer.RemoveAt(0);
+                                    command_buffer.Insert(0, new pan_tilt_stop_jog_command(camera_num, this));
+                                }
+                            }
+                        }
+
+                        // Next command is a pan/tilt absolute, but it would go out of range
+                        if (command_buffer[0] is pan_tilt_absolute_command)
+                        {
+                            if (((pan_tilt_absolute_command)command_buffer[0]).pan_pos.encoder_count > maximum_pan_angle.encoder_count ||
+                                ((pan_tilt_absolute_command)command_buffer[0]).pan_pos.encoder_count < minimum_pan_angle.encoder_count ||
+                                ((pan_tilt_absolute_command)command_buffer[0]).tilt_pos.encoder_count > maximum_tilt_angle.encoder_count ||
+                                ((pan_tilt_absolute_command)command_buffer[0]).tilt_pos.encoder_count < minimum_tilt_angle.encoder_count)
+                            {
+                                Trace.WriteLine(DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " User request movement out of range: " + command_buffer[0].ToString());
+                                command_buffer.RemoveAt(0);
+                                if (requested_absolute_limit_error != null) requested_absolute_limit_error(this, EventArgs.Empty);  // Inform the "user" that an error happened
+                                continue;  // Since we removed a command (and didn't replace it like in the similar jog scenario), we start over
+                            }
+                        }
+
+                        // Next command is a zoom jog, but it would jog out of range
+                        if (command_buffer[0] is zoom_jog_command)
+                        {
+                            if ((zoom.encoder_count >= maximum_zoom_ratio.encoder_count && ((zoom_jog_command)command_buffer[0]).direction == ZOOM_DIRECTION.IN) ||
+                                 (zoom.encoder_count <= minimum_zoom_ratio.encoder_count && ((zoom_jog_command)command_buffer[0]).direction == ZOOM_DIRECTION.OUT))
+                            {
+                                Trace.WriteLine(DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " User request movement out of range: " + command_buffer[0].ToString());
+                                command_buffer.RemoveAt(0);
+                                command_buffer.Insert(0, new zoom_stop_jog_command(camera_num, this));
+                                if (requested_jog_limit_error != null) requested_jog_limit_error(this, EventArgs.Empty);  // Inform the "user" that an error happened
+                            }
+                        }
+
+                        // Next command is a zoom absolute, but it would go out of range
+                        if (command_buffer[0] is zoom_absolute_command)
+                        {
+                            if (((zoom_absolute_command)command_buffer[0]).zoom_pos.encoder_count > maximum_zoom_ratio.encoder_count ||
+                                ((zoom_absolute_command)command_buffer[0]).zoom_pos.encoder_count < minimum_zoom_ratio.encoder_count)
+                            {
+                                Trace.WriteLine(DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " User request movement out of range: " + command_buffer[0].ToString());
+                                command_buffer.RemoveAt(0);
+                                if (requested_absolute_limit_error != null) requested_absolute_limit_error(this, EventArgs.Empty);  // Inform the "user" that an error happened
+                                continue;  // Since we removed a command (and didn't replace it like in the similar jog scenario), we start over
+                            }
+                        }
+
+                        // Next command is a pan/tilt jog, but the drive is doing an absolute motion
+                        if (command_buffer[0] is pan_tilt_jog_command && pan_tilt_status == DRIVE_STATUS.ABSOLUTE)
+                        {
+                            if (socket_one_cmd is pan_tilt_absolute_command)  // The absolute command was in socket one
+                                command_buffer.Insert(0, new pan_tilt_cancel_command(camera_num, this, 1));
+                            else  // The command was in socket two
+                                command_buffer.Insert(0, new pan_tilt_cancel_command(camera_num, this, 2));
+                        }
+
+                        // Next command is an pan/tilt absolute, but the drive is already doing an absolute motion
+                        else if (command_buffer[0] is pan_tilt_absolute_command && pan_tilt_status == DRIVE_STATUS.ABSOLUTE)
+                        {
+                            if (socket_one_cmd is pan_tilt_absolute_command)  // The absolute command was in socket one
+                                command_buffer.Insert(0, new pan_tilt_cancel_command(camera_num, this, 1));
+                            else  // The command was in socket two
+                                command_buffer.Insert(0, new pan_tilt_cancel_command(camera_num, this, 2));
+                        }
+
+                        // Next command is an pan/tilt absolute, but the drive is already doing a jog motion
+                        else if (command_buffer[0] is pan_tilt_absolute_command && pan_tilt_status == DRIVE_STATUS.JOG)
+                            command_buffer.Insert(0, new pan_tilt_stop_jog_command(camera_num, this));
+
+                        // Next command is a pan/tilt movement command, but the drive is in the process of stopping
+                        // Note that if the command is a jog, and the drive is stopping from a jog, we CAN can send it
+                        else if ((command_buffer[0] is pan_tilt_absolute_command && (pan_tilt_status == DRIVE_STATUS.STOP_ABSOLUTE || pan_tilt_status == DRIVE_STATUS.STOP_JOG)) ||
+                                  (command_buffer[0] is pan_tilt_jog_command && pan_tilt_status == DRIVE_STATUS.STOP_ABSOLUTE))
+                            command_buffer.Insert(0, new pan_tilt_inquiry_command(camera_num, this));
+
+                        // Next command is a pan/tilt stop (from a jog) command, but the drive is doing an absolute motion
+                        // This the default command for when we want to stop, so it needs to be replaced with a stop from absolute command
+                        else if (command_buffer[0] is pan_tilt_stop_jog_command && pan_tilt_status == DRIVE_STATUS.ABSOLUTE)
+                        {
+                            command_buffer.RemoveAt(0);
+                            if (socket_one_cmd is pan_tilt_absolute_command)  // The absolute command was in socket one
+                                command_buffer.Insert(0, new pan_tilt_cancel_command(camera_num, this, 1));
+                            else  // The command was in socket two
+                                command_buffer.Insert(0, new pan_tilt_cancel_command(camera_num, this, 2));
+                        }
+
+                        // Next command is a zoom jog, but the drive is doing an absolute motion
+                        else if (command_buffer[0] is zoom_jog_command && zoom_status == DRIVE_STATUS.ABSOLUTE)
+                        {
+                            if (socket_one_cmd is zoom_absolute_command)  // The absolute command was in socket one
+                                command_buffer.Insert(0, new zoom_cancel_command(camera_num, this, 1));
+                            else  // The command was in socket two
+                                command_buffer.Insert(0, new zoom_cancel_command(camera_num, this, 2));
+                        }
+
+                        // Next command is an zoom absolute, but the drive is already doing an absolute motion
+                        else if (command_buffer[0] is zoom_absolute_command && zoom_status == DRIVE_STATUS.ABSOLUTE)
+                        {
+                            if (socket_one_cmd is zoom_absolute_command)  // The absolute command was in socket one
+                                command_buffer.Insert(0, new zoom_cancel_command(camera_num, this, 1));
+                            else  // The command was in socket two
+                                command_buffer.Insert(0, new zoom_cancel_command(camera_num, this, 2));
+                        }
+
+                        // Next command is an zoom absolute, but the drive is already doing a jog motion
+                        else if (command_buffer[0] is zoom_absolute_command && zoom_status == DRIVE_STATUS.JOG)
+                            command_buffer.Insert(0, new zoom_stop_jog_command(camera_num, this));
+
+                        // Next command is a zoom movement command, but the drive is in the process of stopping
+                        // Note that if the command is a jog, and the drive is stopping from a jog, we CAN can send it
+                        else if ((command_buffer[0] is zoom_absolute_command && (zoom_status == DRIVE_STATUS.STOP_ABSOLUTE || zoom_status == DRIVE_STATUS.STOP_JOG)) ||
+                                  (command_buffer[0] is zoom_jog_command && zoom_status == DRIVE_STATUS.STOP_ABSOLUTE))
+                            command_buffer.Insert(0, new zoom_inquiry_command(camera_num, this));
+
+                        // Next command is a zoom stop (from a jog) command, but the drive is doing an absolute motion
+                        // This the default command for when we want to stop, so it needs to be replaced with a stop from absolute command
+                        else if (command_buffer[0] is zoom_stop_jog_command && zoom_status == DRIVE_STATUS.ABSOLUTE)
+                        {
+                            command_buffer.RemoveAt(0);
+                            if (socket_one_cmd is zoom_absolute_command)  // The absolute command was in socket one
+                                command_buffer.Insert(0, new zoom_cancel_command(camera_num, this, 1));
+                            else  // The command was in socket two
+                                command_buffer.Insert(0, new zoom_cancel_command(camera_num, this, 2));
+                        }
+
+                        ////   End of special cases section   ////
+                        ////   We should now be able to send whatever is the next command   ////
+                        ////   However, we must make sure there is a socket available for most commands   ////
+
+                        // If there is no socket available (and the command requires a socket), we move the command to the end of the buffer
+                        if (!socket_available.IsSet && (command_buffer[0] is zoom_inquiry_command || command_buffer[0] is pan_tilt_absolute_command ||
+                                                        command_buffer[0] is pan_tilt_jog_command || command_buffer[0] is pan_tilt_stop_jog_command ||
+                                                        command_buffer[0] is zoom_absolute_command || command_buffer[0] is zoom_jog_command ||
+                                                        command_buffer[0] is zoom_stop_jog_command))
+                        {
+                            Trace.WriteLine(DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " No socket available, moving " + command_buffer[0].ToString() + "  to end of buffer");
+                            command_buffer.Move(0, command_buffer.Count - 1);
+                            ++num_cmds_since_inquiry;  // We do this so it doesn't get stuck never sending any inquiry
+                            continue;  // Start over
+                        }
+
+                        // Send the next command
+                        dispatch_next_command();
                     }
                 }
                 catch (OperationCanceledException)
