@@ -2552,6 +2552,61 @@ namespace visca
         private Thread inquiry_after_stop_thread;
 
         // Dispatch thread
+        private void dispatch_DoWork()
+        {
+            bool last_inquiry_was_pan_tilt = false;
+            int num_cmds_since_inquiry = 0;
+
+            // Local function for writing the command to the serial port
+            void dispatch_next_command()
+            {
+                port.Write(command_buffer[0].raw_serial_data, 0, command_buffer[0].raw_serial_data.Length);
+                serial_channel_open.Reset();  // Serial channel is now closed to communication
+                dispatched_cmd = command_buffer[0];
+
+                if (dispatched_cmd is pan_tilt_inquiry_command)  // Was a pan/tilt inquiry
+                {
+                    num_cmds_since_inquiry = 0;
+                    last_inquiry_was_pan_tilt = true;
+                }
+                else if (dispatched_cmd is zoom_inquiry_command)  // Was a zoom inquiry
+                {
+                    num_cmds_since_inquiry = 0;
+                    last_inquiry_was_pan_tilt = false;
+                }
+                else  // The command wasn't an inquiry
+                    ++num_cmds_since_inquiry;
+
+                command_buffer.RemoveAt(0);
+
+                lock (log)
+                {
+                    log.TraceEvent(TraceEventType.Information, 1, DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " Command dispatched: " + dispatched_cmd.ToString());
+                }
+            }
+
+            while (true)
+            {
+                try
+                {
+                    serial_channel_open.Wait(thread_control.Token);  // Wait for the serial port to be available
+                    command_buffer_populated.Wait(thread_control.Token);  // This event is reset when there is nothing to do.  At this point, nothing is done until something is put into the buffer
+
+                    lock (command_buffer)
+                    {
+
+                    }
+                }
+                catch (OperationCanceledException)
+                {
+                    lock (log)
+                    {
+                        log.TraceEvent(TraceEventType.Information, 1, DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " Dispatch thread terminated");  // Thread terminated
+                    }
+                }
+            }
+        }
+        private Thread dispatch_thread;
 
         public visca_camera() : this(null)
         {
