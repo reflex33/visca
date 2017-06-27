@@ -1950,6 +1950,9 @@ namespace visca
         public delegate void JogOutOfRangeEventHandler(object sender, EventArgs e);
         public event JogOutOfRangeEventHandler pan_tilt_jog_limit_error;  // Message triggered when the pan/tilt drive reaches its limit
         public event JogOutOfRangeEventHandler zoom_jog_limit_error;  // Message triggered when the zoom drive reaches its limit
+        public delegate void RequestOutOfRangeEventHandler(object sender, EventArgs e);
+        public event RequestOutOfRangeEventHandler requested_jog_limit_error;  // Message triggered when user asks for jog past limit
+        public event RequestOutOfRangeEventHandler requested_absolute_limit_error;  // Message triggered when user asks for absolute past limit
 
         // Receive thread
         private int get_response(out List<int> response_buffer, bool use_timeout = true)
