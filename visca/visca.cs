@@ -591,10 +591,13 @@ namespace visca
             }
         }
 
-        public pan_tilt_jog_command(int camera_number, visca_camera limit_check_camera, int speed = 6, double direction_in_degrees = 0)
+        public pan_tilt_jog_command(int camera_number, visca_camera limit_check_camera, int? speed = null, double direction_in_degrees = 0)
             : base(camera_number, limit_check_camera)
         {
-            pan_tilt_speed = speed;
+            if (speed.HasValue)
+                pan_tilt_speed = speed.Value;
+            else
+                pan_tilt_speed = command_limit_check_camera.default_pan_tilt_speed;
             direction_deg = direction_in_degrees;
         }
         public pan_tilt_jog_command(pan_tilt_jog_command rhs)
@@ -753,10 +756,13 @@ namespace visca
             }
         }
 
-        public pan_tilt_absolute_command(int camera_number, visca_camera limit_check_camera, int speed = 6, angular_position pan_position = null, angular_position tilt_position = null)
+        public pan_tilt_absolute_command(int camera_number, visca_camera limit_check_camera, int? speed = null, angular_position pan_position = null, angular_position tilt_position = null)
             : base(camera_number, limit_check_camera)
         {
-            pan_tilt_speed = speed;
+            if (speed.HasValue)
+                pan_tilt_speed = speed.Value;
+            else
+                pan_tilt_speed = command_limit_check_camera.default_pan_tilt_speed;
             if (pan_position == null)
                 pan_pos = new angular_position();
             else
@@ -962,10 +968,13 @@ namespace visca
             }
         }
 
-        public zoom_jog_command(int camera_number, visca_camera limit_check_camera, int speed = 4, ZOOM_DIRECTION d = ZOOM_DIRECTION.OUT)
+        public zoom_jog_command(int camera_number, visca_camera limit_check_camera, int? speed = null, ZOOM_DIRECTION d = ZOOM_DIRECTION.OUT)
             : base(camera_number, limit_check_camera)
         {
-            zoom_speed = speed;
+            if (speed.HasValue)
+                zoom_speed = speed.Value;
+            else
+                zoom_speed = command_limit_check_camera.default_zoom_speed;
             direction = d;
         }
         public zoom_jog_command(zoom_jog_command rhs)
@@ -1342,6 +1351,8 @@ namespace visca
         private ManualResetEventSlim after_stop = new ManualResetEventSlim(false);
         private ManualResetEventSlim pan_tilt_inquiry_complete = new ManualResetEventSlim(false);
         private ManualResetEventSlim zoom_inquiry_complete = new ManualResetEventSlim(false);
+        private ManualResetEventSlim pid_turnstyle = new ManualResetEventSlim(false);
+        private ManualResetEventSlim pid_data_turnstyle = new ManualResetEventSlim(true);
 
         // Tracers
         protected TraceSource log;
@@ -1622,7 +1633,7 @@ namespace visca
             get;
         }
 
-        // Hardware encoder conversion factors.  These values are all 0s and actual factors are in derived classes
+        // Hardware encoder conversion factors.  These values are abstract and actual factors are in derived classes
         protected abstract double pan_degrees_per_encoder_count
         {
             get;
@@ -1632,6 +1643,16 @@ namespace visca
             get;
         }
         protected abstract Tuple<double, short>[] zoom_values();
+
+        // Hardware default speeds.  These values are abstract and actual values are in dervied classes
+        public abstract int default_pan_tilt_speed
+        {
+            get;
+        }
+        public abstract int default_zoom_speed
+        {
+            get;
+        }
 
         // User defined position limits
         private angular_position _maximum_pan_angle;
@@ -1856,8 +1877,8 @@ namespace visca
         private DRIVE_STATUS pan_tilt_status = DRIVE_STATUS.FULL_STOP;
         private DRIVE_STATUS zoom_status = DRIVE_STATUS.FULL_STOP;
         public angular_position pan { get; protected set; }
-        public angular_position tilt { get; protected set; }  // Each inherited camera type should have its own conversion factors, therefore this should be intialized in the inherited classes
-        public zoom_position zoom { get; protected set; }     // Each inherited camera type should have its own conversion factors, therefore this should be intialized in the inherited classes
+        public angular_position tilt { get; protected set; }
+        public zoom_position zoom { get; protected set; }
         private void trace_camera_status(ref int line_count)
         {
             lock (log)
@@ -2887,6 +2908,163 @@ namespace visca
         }
         private Thread dispatch_thread;
 
+        //PID(ish) control
+        private void pid_data_changed(object sender, EventArgs e)
+        {
+            lock (command_buffer)
+            {
+                pid_data_turnstyle.Set();
+            }
+        }
+        public bool pid_control
+        {
+            get
+            {
+                return pid_turnstyle.IsSet;
+            }
+            set
+            {
+                if (value == true)
+                    pid_turnstyle.Set();
+                else
+                    pid_turnstyle.Reset();
+            }
+        }
+        private angular_position _pid_target_pan_position;
+        public angular_position pid_target_pan_position
+        {
+            get
+            {
+                lock (command_buffer)
+                {
+                    return _pid_target_pan_position;
+                }
+            }
+            private set
+            {
+                lock (command_buffer)
+                {
+                    _pid_target_pan_position = value;
+                }
+            }
+        }
+        private angular_position _pid_target_tilt_position;
+        public angular_position pid_target_tilt_position
+        {
+            get
+            {
+                lock (command_buffer)
+                {
+                    return _pid_target_tilt_position;
+                }
+            }
+            private set
+            {
+                lock (command_buffer)
+                {
+                    _pid_target_tilt_position = value;
+                }
+            }
+        }
+        private zoom_position _pid_target_zoom_position;
+        public zoom_position pid_target_zoom_position
+        {
+            get
+            {
+                lock (command_buffer)
+                {
+                    return _pid_target_zoom_position;
+                }
+            }
+            private set
+            {
+                lock (command_buffer)
+                {
+                    _pid_target_zoom_position = value;
+                }
+            }
+        }
+        private int _pid_pan_tilt_speed;
+        public int pid_pan_tilt_speed
+        {
+            get
+            {
+                return _pid_pan_tilt_speed;
+            }
+            set
+            {
+                if (value >= hardware_maximum_pan_tilt_speed || value <= hardware_minimum_pan_tilt_speed)
+                    throw new System.ArgumentException("Invalid speed for pan/tilt drive");
+
+                _pid_pan_tilt_speed = value;
+            }
+        }
+        private int _pid_zoom_speed;
+        public int pid_zoom_speed
+        {
+            get
+            {
+                return _pid_zoom_speed;
+            }
+            set
+            {
+                if (value >= hardware_maximum_zoom_speed || value <= hardware_minimum_zoom_speed)
+                    throw new System.ArgumentException("Invalid speed for zoom drive");
+
+                _pid_zoom_speed = value;
+            }
+        }
+        private void pid_DoWork()
+        {
+            bool pid_was_active = false;
+            while (true)
+            {
+                try
+                {
+                    if (!pid_turnstyle.IsSet && pid_was_active)  // PID movement was active, but now the user wants it to stop...
+                    {
+                        emergency_stop();  // Before we wait, we need to stop the camera
+                        pid_was_active = false;
+                    }
+
+                    pid_turnstyle.Wait(thread_control.Token);  // Wait for PID control to be enabled
+                    pid_data_turnstyle.Wait(thread_control.Token);  // Wait for data to change
+
+                    double pan_error;
+                    double tilt_error;
+                    double zoom_error;
+                    lock (command_buffer)
+                    {
+                        pan_error = pid_target_pan_position.degrees - pan.degrees;
+                        tilt_error = pid_target_tilt_position.degrees - tilt.degrees;
+                        zoom_error = pid_target_zoom_position.ratio - zoom.ratio;
+                        pid_data_turnstyle.Reset();  // Handled current data
+                    }
+                    if (Math.Abs(pan_error) > 5 || Math.Abs(tilt_error) > 5)  // Off by more than 5 degrees in some direction
+                    {
+                        double temp = Math.Atan2(tilt_error, pan_error);
+                        jog_pan_tilt_radians(_pid_pan_tilt_speed, Math.Atan2(tilt_error, pan_error));
+                    }
+                    else  // Pan/tilt is close enough
+                        stop_pan_tilt();
+                    if (zoom_error > 0.2)  // Need to zoom in
+                        jog_zoom(_pid_zoom_speed, ZOOM_DIRECTION.IN);
+                    else if (zoom_error < -0.2)  // Need to zoom out
+                        jog_zoom(_pid_zoom_speed, ZOOM_DIRECTION.OUT);
+                    else  // Zoom is close enough
+                        stop_zoom();
+
+                    pid_was_active = true;
+                }
+                catch (OperationCanceledException)
+                {
+                    Trace.WriteLineWRONG("PID thread terminated");
+                    return;
+                }
+            }
+        }
+        private Thread pid_thread;
+
         public visca_camera() : this(null)
         {
         }
@@ -2904,6 +3082,19 @@ namespace visca
             pan = new angular_position(pan_degrees_per_encoder_count);
             tilt = new angular_position(tilt_degrees_per_encoder_count);
             zoom = new zoom_position(zoom_values());
+
+            // PID setup
+            _pid_target_pan_position = new angular_position(pan_degrees_per_encoder_count);
+            _pid_target_tilt_position = new angular_position(tilt_degrees_per_encoder_count);
+            _pid_target_zoom_position = new zoom_position(zoom_values());
+            pid_pan_tilt_speed = default_pan_tilt_speed;
+            pid_zoom_speed = default_zoom_speed;
+            pan.position_changed += new EventHandler<EventArgs>(pid_data_changed);
+            tilt.position_changed += new EventHandler<EventArgs>(pid_data_changed);
+            zoom.position_changed += new EventHandler<EventArgs>(pid_data_changed);
+            _pid_target_pan_position.position_changed += new EventHandler<EventArgs>(pid_data_changed);
+            _pid_target_tilt_position.position_changed += new EventHandler<EventArgs>(pid_data_changed);
+            _pid_target_zoom_position.position_changed += new EventHandler<EventArgs>(pid_data_changed);
 
             // Setup for tracers
             log = new TraceSource(ToString() + " Log");
@@ -3075,6 +3266,16 @@ namespace visca
             zoom_values[0] = Tuple.Create(216.0, (short)31424);
 
             return zoom_values;
+        }
+
+        // Hardware default speeds
+        public override int default_pan_tilt_speed
+        {
+            get { return 6; }
+        }
+        public override int default_zoom_speed
+        {
+            get { return 4; }
         }
 
         public EVI_D70() : this(null)
