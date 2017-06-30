@@ -3148,6 +3148,34 @@ namespace visca
                 return false;
         }
         public abstract override string ToString();
+
+        ~visca_camera()
+        {
+            Dispose(false);
+        }
+        private bool disposed = false;
+        public void Dispose()
+        {
+            Dispose(true);
+            GC.SuppressFinalize(this);
+        }
+        protected virtual void Dispose(bool disposing)
+        {
+            if (!disposed)
+            {
+                thread_control.Cancel();  // Stop the threads from running
+
+                // Wait for threads to finish
+                receive_thread.Join();
+                dispatch_thread.Join();
+                inquiry_after_stop_thread.Join();
+
+                if (disposing)
+                    port.Close();
+
+                disposed = true;
+            }
+        }
     }
 
     public class EVI_D70 : visca_camera
